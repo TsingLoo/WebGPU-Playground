@@ -239,6 +239,16 @@ surfelFolder.add(stage.surfelGI, 'enabled').name('Enabled').listen().onChange((v
 surfelFolder.add(stage.surfelGI, 'debugMode').name('Debug Mode').listen();
 surfelFolder.open();
 
+// =========== SSAO ===========
+const ssaoFolder = gui.addFolder('SSAO');
+ssaoFolder.add(stage.ssao, 'enabled').name('Enabled').listen().onChange(() => {
+    stage.ssao.updateUniforms();
+});
+ssaoFolder.add(stage.ssao, 'radius', 0.1, 5.0).step(0.1).name('Radius').onChange(() => { stage.ssao.updateUniforms(); });
+ssaoFolder.add(stage.ssao, 'bias', 0.0, 0.2).step(0.001).name('Bias').onChange(() => { stage.ssao.updateUniforms(); });
+ssaoFolder.add(stage.ssao, 'power', 0.1, 5.0).step(0.1).name('Power').onChange(() => { stage.ssao.updateUniforms(); });
+ssaoFolder.open();
+
 // =========== Helper functions (HDR / EXR parsing) ===========
 function parseHdrFile(buffer: ArrayBuffer): { rgbaData: Float32Array, width: number, height: number } {
     const parsedLayout = parseHdr(buffer);

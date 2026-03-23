@@ -60,6 +60,10 @@ import vsmAllocatePagesRaw from './vsm_allocate_pages.cs.wgsl?raw';
 import skyboxVertRaw from './skybox.vs.wgsl?raw';
 import skyboxFragRaw from './skybox.fs.wgsl?raw';
 
+// SSAO shaders
+import ssaoFragRaw from './ssao.fs.wgsl?raw';
+import ssaoBlurFragRaw from './ssao_blur.fs.wgsl?raw';
+
 // Volumetric Lighting shaders
 import volumetricLightingVertRaw from './volumetric_lighting.vs.wgsl?raw';
 import volumetricLightingFragRaw from './volumetric_lighting.fs.wgsl?raw';
@@ -171,6 +175,10 @@ export const equirectangularToCubemapSrc = equirectangularToCubemapRaw;
 // Skybox shaders (need common for CameraUniforms)
 export const skyboxVertSrc: string = processShaderRaw(skyboxVertRaw);
 export const skyboxFragSrc: string = processShaderRaw(skyboxFragRaw);
+
+// SSAO shaders (need common)
+export const ssaoFragSrc: string = processShaderRaw(ssaoFragRaw);
+export const ssaoBlurFragSrc: string = processShaderRaw(ssaoBlurFragRaw);
 
 // Volumetric shaders (need common)
 export const volumetricLightingVertSrc: string = processShaderRaw(volumetricLightingVertRaw);

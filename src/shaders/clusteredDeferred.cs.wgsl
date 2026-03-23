@@ -30,6 +30,9 @@
 @group(${bindGroup_scene}) @binding(25) var surfelIrradianceTex: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(26) var<uniform> surfelParams: vec4f; // .x = enabled, .y = intensity
 
+// SSAO binding
+@group(${bindGroup_scene}) @binding(27) var ssaoTex: texture_2d<f32>;
+
 @compute @workgroup_size(8, 8, 1)
 fn main(
     @builtin(global_invocation_id) global_id: vec3u
@@ -56,7 +59,10 @@ fn main(
     
     let roughness = max(specularData.r, 0.04);
     let metallic = specularData.g;
-    let ao = specularData.b; // ambient occlusion from G-buffer
+    
+    var ao = specularData.b; // ambient occlusion from G-buffer
+    let ssao_val = textureLoad(ssaoTex, fragcoordi, 0).r;
+    ao = ao * ssao_val;
 
     let N = normalize(nor_world);
     let V = normalize(camera.camera_pos.xyz - pos_world);

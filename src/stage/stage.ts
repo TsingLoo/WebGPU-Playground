@@ -7,6 +7,7 @@ import { NRC } from "./nrc";
 import { Scene } from "./scene";
 import { VSM } from "./vsm";
 import { SurfelGI } from './surfel_gi';
+import { SSAO } from "./ssao";
 
 export class Stage {
     scene: Scene;
@@ -18,6 +19,7 @@ export class Stage {
     nrc: NRC;
     vsm: VSM;
     surfelGI: SurfelGI;
+    ssao: SSAO;
 
     // Sun light
     sunLightBuffer: GPUBuffer;
@@ -42,6 +44,7 @@ export class Stage {
         this.nrc = new NRC(this.camera, this.environment);
         this.vsm = new VSM(this.camera);
         this.surfelGI = new SurfelGI(this.camera);
+        this.ssao = new SSAO();
 
         // Sync sun direction into VSM
         this.vsm.sunDirection = this.sunDirection;

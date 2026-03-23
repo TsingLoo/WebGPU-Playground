@@ -25,6 +25,7 @@
 @group(${bindGroup_scene}) @binding(22) var gBufferAlbedo: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(23) var surfelIrradianceTex: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(24) var<uniform> surfelParams: vec4f;
+@group(${bindGroup_scene}) @binding(25) var ssaoTex: texture_2d<f32>;
 
 @group(${bindGroup_material}) @binding(0) var diffuseTex: texture_2d<f32>;
 @group(${bindGroup_material}) @binding(1) var diffuseTexSampler: sampler;
@@ -94,6 +95,9 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         metallic = metallic * mrSample.b;
     }
     roughness = max(roughness, 0.04); // clamp to avoid singularity
+    
+    let ssao_val = textureLoad(ssaoTex, vec2i(in.fragcoord.xy), 0).r;
+    ao = ao * ssao_val;
 
     // Normal mapping: build TBN matrix and sample normal map
     var N = normalize(in.nor_world);
