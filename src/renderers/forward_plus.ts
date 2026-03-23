@@ -792,7 +792,7 @@ export class ForwardPlusRenderer extends renderer.Renderer {
         skyboxPass.end();
 
         // Volumetric Lighting Generation Pass (Half-Res)
-        if (false && this.stage.sunVolumetricEnabled) {
+        if (this.stage.sunVolumetricEnabled) {
             const volumetricPass = encoder.beginRenderPass({
                 label: "Volumetric Lighting Generator Pass",
                 colorAttachments: [
