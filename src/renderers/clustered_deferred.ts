@@ -65,6 +65,19 @@ export class ClusteredDeferredRenderer extends renderer.Renderer {
     volumetricCompositeBindGroupLayout: GPUBindGroupLayout;
     volumetricCompositeBindGroup!: GPUBindGroup;
 
+    ssaoTexture: GPUTexture;
+    ssaoTextureView: GPUTextureView;
+    ssaoBlurredTexture: GPUTexture;
+    ssaoBlurredTextureView: GPUTextureView;
+
+    ssaoBindGroupLayout: GPUBindGroupLayout;
+    ssaoBindGroup: GPUBindGroup;
+    ssaoPipeline: GPURenderPipeline;
+
+    ssaoBlurBindGroupLayout: GPUBindGroupLayout;
+    ssaoBlurBindGroup: GPUBindGroup;
+    ssaoBlurPipeline: GPURenderPipeline;
+
     ddgi: DDGI;
     private stageEnv: import('../stage/environment').Environment;
     private stage: import('../stage/stage').Stage;
@@ -143,6 +156,22 @@ export class ClusteredDeferredRenderer extends renderer.Renderer {
         });
         this.surfelIrradianceDeviceTextureView = this.surfelIrradianceDeviceTexture.createView();
         
+        this.ssaoTexture = renderer.device.createTexture({
+            label: "ssao texture",
+            size: geometryDeviceTextureSize,
+            format: "r16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+        });
+        this.ssaoTextureView = this.ssaoTexture.createView();
+
+        this.ssaoBlurredTexture = renderer.device.createTexture({
+            label: "ssao blurred texture",
+            size: geometryDeviceTextureSize,
+            format: "r16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+        });
+        this.ssaoBlurredTextureView = this.ssaoBlurredTexture.createView();
+
         this.surfelParamsBuffer = renderer.device.createBuffer({
             label: "surfel params buffer",
             size: 16,
@@ -278,7 +307,47 @@ export class ClusteredDeferredRenderer extends renderer.Renderer {
                 // Surfel GI
                 { binding: 25, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float' } },    // Surfel irradiance
                 { binding: 26, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },         // Surfel params
+                // SSAO
+                { binding: 27, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
             ]
+        });
+
+        this.ssaoBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "ssao bgl",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ]
+        });
+        this.ssaoBindGroup = renderer.device.createBindGroup({
+            layout: this.ssaoBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
+                { binding: 1, resource: this.geometryPositionDeviceTextureView },
+                { binding: 2, resource: this.geometryNormalDeviceTextureView },
+                { binding: 3, resource: { buffer: this.stage.ssao.uniformsBuffer } },
+            ]
+        });
+        this.ssaoPipeline = renderer.device.createRenderPipeline({
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBindGroupLayout] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
+        });
+
+        this.ssaoBlurBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "ssao blur bgl",
+            entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } }]
+        });
+        this.ssaoBlurBindGroup = renderer.device.createBindGroup({
+            layout: this.ssaoBlurBindGroupLayout,
+            entries: [{ binding: 0, resource: this.ssaoTextureView }]
+        });
+        this.ssaoBlurPipeline = renderer.device.createRenderPipeline({
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBlurBindGroupLayout] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoBlurFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
         });
 
         this.zPrepassPipeline = renderer.device.createRenderPipeline({
@@ -716,8 +785,39 @@ export class ClusteredDeferredRenderer extends renderer.Renderer {
                 { binding: 24, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
                 { binding: 25, resource: this.surfelIrradianceDeviceTextureView },
                 { binding: 26, resource: { buffer: this.surfelParamsBuffer } },
+                { binding: 27, resource: this.ssaoBlurredTextureView },
             ]
         });
+
+        // SSAO pass
+        const ssaoPass = encoder.beginRenderPass({
+            label: "SSAO pass",
+            colorAttachments: [{
+                view: this.ssaoTextureView,
+                clearValue: [1, 1, 1, 1],
+                loadOp: "clear",
+                storeOp: "store"
+            }]
+        });
+        ssaoPass.setPipeline(this.ssaoPipeline);
+        ssaoPass.setBindGroup(0, this.ssaoBindGroup);
+        ssaoPass.draw(3);
+        ssaoPass.end();
+
+        // SSAO blur pass
+        const ssaoBlurPass = encoder.beginRenderPass({
+            label: "SSAO blur pass",
+            colorAttachments: [{
+                view: this.ssaoBlurredTextureView,
+                clearValue: [1, 1, 1, 1],
+                loadOp: "clear",
+                storeOp: "store"
+            }]
+        });
+        ssaoBlurPass.setPipeline(this.ssaoBlurPipeline);
+        ssaoBlurPass.setBindGroup(0, this.ssaoBlurBindGroup);
+        ssaoBlurPass.draw(3);
+        ssaoBlurPass.end();
 
         // Deferred shading compute pass
         const shadingComputePass = encoder.beginComputePass();
