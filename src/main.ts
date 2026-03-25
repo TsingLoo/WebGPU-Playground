@@ -4,7 +4,7 @@ import Stats from 'stats.js';
 import { GUI } from 'dat.gui';
 
 import { initWebGPU, Renderer } from './renderer';
-import { NaiveRenderer } from './renderers/naive';
+
 import { ForwardPlusRenderer } from './renderers/forward_plus';
 import { ClusteredDeferredRenderer } from './renderers/clustered_deferred';
 
@@ -103,7 +103,7 @@ const avgStats = {
 const gui = new GUI();
 
 // =========== Render Mode (top-level) ===========
-const renderModes = { naive: 'naive', forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
+const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
 gui.add(avgStats, 'avgFPS_20s').name('Avg FPS (8s)').listen();
@@ -151,9 +151,6 @@ function setRenderer(mode: string) {
     renderer?.stop();
 
     switch (mode) {
-        case renderModes.naive:
-            renderer = new NaiveRenderer(stage);
-            break;
         case renderModes.forwardPlus:
             renderer = new ForwardPlusRenderer(stage);
             break;
