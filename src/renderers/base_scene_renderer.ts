@@ -26,10 +26,11 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     dummyBuffer: GPUBuffer;
 
     zPrepassPipeline: GPURenderPipeline;
-
+    zPrepassOpaquePipeline: GPURenderPipeline;
     geometryBindGroupLayout: GPUBindGroupLayout;
     geometryBindGroup: GPUBindGroup;
     geometryPipeline: GPURenderPipeline;
+    geometryOpaquePipeline: GPURenderPipeline;
 
     cullingBindGroupLayout: GPUBindGroupLayout;
     cullingBindGroup: GPUBindGroup;
@@ -212,17 +213,48 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                     { format: 'rgba8unorm' },  // specular
                 ]
             },
-            primitive: { topology: 'triangle-list', cullMode: 'back' }
+            primitive: { topology: 'triangle-list', cullMode: 'none' }
+        });
+
+        this.geometryOpaquePipeline = renderer.device.createRenderPipeline({
+            label: "geometry opaque pipeline",
+            layout: renderer.device.createPipelineLayout({
+                bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
+            }),
+            depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'equal' },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            fragment: {
+                module: renderer.device.createShaderModule({ code: shaders.geometryOpaqueFragSrc }),
+                entryPoint: 'main',
+                targets: [
+                    { format: 'rgba16float' }, // albedo
+                    { format: 'rgba16float' }, // normal
+                    { format: 'rgba16float' }, // position
+                    { format: 'rgba8unorm' },  // specular
+                ]
+            },
+            primitive: { topology: 'triangle-list', cullMode: 'none' }
         });
 
         this.zPrepassPipeline = renderer.device.createRenderPipeline({
-            label: "Z-Prepass pipeline",
+            label: "Z-Prepass cutout pipeline",
             layout: renderer.device.createPipelineLayout({
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
             depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" },
             vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [ renderer.vertexBufferLayout ] },
-            fragment: { module: renderer.device.createShaderModule({ code: shaders.zPrepassFragSrc }), entryPoint: "main", targets: [] }
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.zPrepassFragSrc }), entryPoint: "main", targets: [] },
+            primitive: { topology: 'triangle-list', cullMode: 'none' }
+        });
+
+        this.zPrepassOpaquePipeline = renderer.device.createRenderPipeline({
+            label: "Z-Prepass opaque pipeline",
+            layout: renderer.device.createPipelineLayout({
+                bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
+            }),
+            depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [ renderer.vertexBufferLayout ] },
+            primitive: { topology: 'triangle-list', cullMode: 'none' } // No fragment block enables Early-Z hardware double-rate depth writes
         });
 
         // -------------------------------------------------------------
@@ -427,15 +459,27 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 depthStoreOp: "store"
             }
         });
-        zPrepass.setPipeline(this.zPrepassPipeline);
         zPrepass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
+        
+        // Opaque queue (Double-rate Z limits hardware writes)
+        zPrepass.setPipeline(this.zPrepassOpaquePipeline);
         this.scene.iterate(node => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); }, 
                            material => { zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup); }, 
                            primitive => {
                                zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
                                zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                                zPrepass.drawIndexed(primitive.numIndices);
-                           });
+                           }, true);
+
+        // Alpha-cutout queue
+        zPrepass.setPipeline(this.zPrepassPipeline);
+        this.scene.iterate(node => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); }, 
+                           material => { zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup); }, 
+                           primitive => {
+                               zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
+                               zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                               zPrepass.drawIndexed(primitive.numIndices);
+                           }, false);
         zPrepass.end();
 
         // 3. VSM Shadow Map Pass
@@ -452,15 +496,27 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             ],
             depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
         });
-        gBufferPass.setPipeline(this.geometryPipeline);
         gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
+        
+        // Opaque queue
+        gBufferPass.setPipeline(this.geometryOpaquePipeline);
         this.scene.iterate(node => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); }, 
                            material => { gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup); }, 
                            primitive => {
                                gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
                                gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                                gBufferPass.drawIndexed(primitive.numIndices);
-                           });
+                           }, true);
+
+        // Alpha-cutout queue
+        gBufferPass.setPipeline(this.geometryPipeline);
+        this.scene.iterate(node => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); }, 
+                           material => { gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup); }, 
+                           primitive => {
+                               gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
+                               gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                               gBufferPass.drawIndexed(primitive.numIndices);
+                           }, false);
         gBufferPass.end();
 
         if (this.stage.ddgi.enabled) {

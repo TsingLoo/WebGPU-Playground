@@ -11,6 +11,7 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
     giDynamicBindGroup!: GPUBindGroup;
 
     shadingPipeline: GPURenderPipeline;
+    shadingOpaquePipeline: GPURenderPipeline;
 
     constructor(stage: Stage) {
         super(stage);
@@ -84,7 +85,7 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
         });
 
         this.shadingPipeline = renderer.device.createRenderPipeline({
-            label: "fwd+ shading pipeline",
+            label: "fwd+ shading cutout pipeline",
             layout: renderer.device.createPipelineLayout({
                 bindGroupLayouts: [
                     this.shadingStaticBindGroupLayout, 
@@ -96,6 +97,21 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
             depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" },
             vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [renderer.vertexBufferLayout] },
             fragment: { module: renderer.device.createShaderModule({ code: shaders.forwardPlusFragSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
+        });
+
+        this.shadingOpaquePipeline = renderer.device.createRenderPipeline({
+            label: "fwd+ shading opaque pipeline",
+            layout: renderer.device.createPipelineLayout({
+                bindGroupLayouts: [
+                    this.shadingStaticBindGroupLayout, 
+                    renderer.modelBindGroupLayout, 
+                    renderer.materialBindGroupLayout,
+                    this.giDynamicBindGroupLayout
+                ]
+            }),
+            depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.forwardPlusOpaqueFragSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
         });
     }
 
@@ -118,12 +134,10 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
             colorAttachments: [ { view: canvasTextureView, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" } ],
             depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
         });
-        shadingRenderPass.setPipeline(this.shadingPipeline);
+        // Opaque queue
         shadingRenderPass.setBindGroup(0, this.shadingStaticBindGroup);
-        // Bind group 1 is set per-node (model)
-        // Bind group 2 is set per-material
         shadingRenderPass.setBindGroup(3, this.giDynamicBindGroup);
-
+        shadingRenderPass.setPipeline(this.shadingOpaquePipeline);
         this.scene.iterate(node => {
             shadingRenderPass.setBindGroup(1, node.modelBindGroup);
         }, material => {
@@ -132,7 +146,19 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
             shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
             shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
             shadingRenderPass.drawIndexed(primitive.numIndices);
-        });
+        }, true);
+
+        // Alpha-cutout queue
+        shadingRenderPass.setPipeline(this.shadingPipeline);
+        this.scene.iterate(node => {
+            shadingRenderPass.setBindGroup(1, node.modelBindGroup);
+        }, material => {
+            shadingRenderPass.setBindGroup(2, material.materialBindGroup);
+        }, primitive => {
+            shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
+            shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+            shadingRenderPass.drawIndexed(primitive.numIndices);
+        }, false);
         shadingRenderPass.end();
     }
 }

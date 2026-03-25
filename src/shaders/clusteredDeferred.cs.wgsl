@@ -164,7 +164,7 @@ fn main(
         diffuseAmbient = max(surfelBounce, iblFloor3);
     } else {
         // No DDGI/NRC/Surfel: use IBL irradiance with moderate scaling
-        diffuseAmbient = iblIrradiance * albedo * 0.7;
+        diffuseAmbient = iblIrradiance * albedo * 1.0;
     }
 
     // Combine: DDGI diffuse (unscaled) + specular IBL (scaled down when DDGI is active)
