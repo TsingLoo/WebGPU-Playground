@@ -162,49 +162,38 @@ function setRenderer(mode: string) {
 
 renderModeController.onChange(setRenderer);
 
-// =========== DDGI ===========
-const ddgiFolder = gui.addFolder('DDGI');
-ddgiFolder.add(stage.ddgi, 'enabled').name('Enabled').listen().onChange((val: boolean) => {
-    if (val) {
-        // stage.surfelGI.enabled = false;
-        // stage.nrc.enabled = false;
-    }
+// ====== GLOBAL GI MODE ======
+const giModes = { Off: 'off', DDGI: 'ddgi', RadianceCascades: 'rc' };
+const currentGIMode = { mode: 'off' };
+gui.add(currentGIMode, 'mode', giModes).name('RT GI Mode').onChange((mode: string) => {
+    stage.ddgi.enabled = (mode === 'ddgi');
+    stage.radianceCascades.enabled = (mode === 'rc');
     stage.ddgi.updateUniforms();
+    stage.radianceCascades.updateUniforms();
 });
-ddgiFolder.add(stage.ddgi, 'ssgiEnabled').name('Hybrid SSGI').onChange(() => {
-    stage.ddgi.updateUniforms();
+
+// =========== Radiance Cascades ===========
+const rcFolder = gui.addFolder('Radiance Cascades');
+rcFolder.add(stage.radianceCascades, 'intensity', 0.0, 5.0).step(0.1).name('Intensity').onChange(() => {
+    stage.radianceCascades.updateUniforms();
 });
-ddgiFolder.add(stage.ddgi, 'irradianceHysteresis', 0.0, 0.999).step(0.001).name('Irr Hysteresis').onChange(() => {
-    stage.ddgi.updateUniforms();
+rcFolder.add(stage.radianceCascades, 'ambient', 0.0, 1.0).step(0.01).name('Ambient').onChange(() => {
+    stage.radianceCascades.updateUniforms();
 });
-ddgiFolder.add(stage.ddgi, 'visibilityHysteresis', 0.0, 0.999).step(0.001).name('Vis Hysteresis').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'normalBias', 0.0, 2.0).step(0.01).name('Normal Bias').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'viewBias', 0.0, 2.0).step(0.01).name('View Bias').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'probeTraceAmbient', 0.0, 1.0).step(0.01).name('Probe Ambient').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'debugMode', { 'Off': 0, 'Raw Atlas': 1, 'Decoded Irr': 2, 'IBL Only': 3, 'Mapped Normal': 4, 'Vertex Normal': 5, 'Tangent': 6, 'NdotL': 7, 'Probe Grid': 8 }).name('Debug View').onChange(() => {
-    stage.ddgi.updateUniforms();
+rcFolder.add(stage.radianceCascades, 'hysteresis', 0.0, 0.999).step(0.001).name('Hysteresis').onChange(() => {
+    stage.radianceCascades.updateUniforms();
 });
 
 // Grid bounds controls
-const gridBoundsFolder = ddgiFolder.addFolder('Grid Bounds');
+const gridBoundsFolder = rcFolder.addFolder('Grid Bounds');
 const gridProxy = {
-    minX: stage.ddgi.gridMin[0], minY: stage.ddgi.gridMin[1], minZ: stage.ddgi.gridMin[2],
-    maxX: stage.ddgi.gridMax[0], maxY: stage.ddgi.gridMax[1], maxZ: stage.ddgi.gridMax[2],
+    minX: stage.radianceCascades.gridMin[0], minY: stage.radianceCascades.gridMin[1], minZ: stage.radianceCascades.gridMin[2],
+    maxX: stage.radianceCascades.gridMax[0], maxY: stage.radianceCascades.gridMax[1], maxZ: stage.radianceCascades.gridMax[2],
 };
 const updateGridBounds = () => {
-    stage.ddgi.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
-    stage.ddgi.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
-    // stage.surfelGI.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
-    // stage.surfelGI.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
-    stage.ddgi.updateUniforms();
+    stage.radianceCascades.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
+    stage.radianceCascades.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
+    stage.radianceCascades.updateUniforms();
 };
 gridBoundsFolder.add(gridProxy, 'minX', -30, 0).step(0.5).name('Min X').onChange(updateGridBounds);
 gridBoundsFolder.add(gridProxy, 'minY', -5, 5).step(0.5).name('Min Y').onChange(updateGridBounds);
@@ -213,6 +202,23 @@ gridBoundsFolder.add(gridProxy, 'maxX', 0, 30).step(0.5).name('Max X').onChange(
 gridBoundsFolder.add(gridProxy, 'maxY', 3, 20).step(0.5).name('Max Y').onChange(updateGridBounds);
 gridBoundsFolder.add(gridProxy, 'maxZ', 0, 20).step(0.5).name('Max Z').onChange(updateGridBounds);
 
+rcFolder.open();
+
+// =========== DDGI ===========
+const ddgiFolder = gui.addFolder('DDGI');
+// ddgiFolder.add(stage.ddgi, 'debugMode', { Off: 0, Irradiance: 1, Visibility: 2 }).name('Debug Mode').onChange(() => { stage.ddgi.updateUniforms(); });
+ddgiFolder.add(stage.ddgi, 'irradianceHysteresis', 0.8, 0.999).step(0.001).name('Irr. Hysteresis').onChange(() => {
+    stage.ddgi.updateUniforms();
+});
+ddgiFolder.add(stage.ddgi, 'visibilityHysteresis', 0.8, 0.999).step(0.001).name('Vis. Hysteresis').onChange(() => {
+    stage.ddgi.updateUniforms();
+});
+ddgiFolder.add(stage.ddgi, 'probeTraceAmbient', 0.0, 1.0).step(0.01).name('Ambient Base').onChange(() => {
+    stage.ddgi.updateUniforms();
+});
+ddgiFolder.add(stage.ddgi, 'ssgiEnabled').name('SSGI').onChange(() => {
+    stage.ddgi.updateUniforms();
+});
 ddgiFolder.open();
 
 // =========== NRC (Neural Radiance Caching) ===========

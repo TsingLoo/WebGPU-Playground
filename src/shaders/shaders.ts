@@ -30,11 +30,15 @@ import prefilterEnvmapRaw from './ibl/prefilter_envmap.cs.wgsl?raw';
 import brdfLutRaw from './ibl/brdf_lut.cs.wgsl?raw';
 import equirectangularToCubemapRaw from './ibl/equirectangular_to_cubemap.cs.wgsl?raw';
 
-// DDGI shaders
+// DDGI
 import ddgiProbeTraceRaw from './ddgi/ddgi_probe_trace.cs.wgsl?raw';
 import ddgiIrradianceUpdateRaw from './ddgi/ddgi_irradiance_update.cs.wgsl?raw';
 import ddgiVisibilityUpdateRaw from './ddgi/ddgi_visibility_update.cs.wgsl?raw';
 import ddgiBorderUpdateRaw from './ddgi/ddgi_border_update.cs.wgsl?raw';
+
+// Radiance Cascades
+import rcTraceRaw from './radiance_cascades/rc_trace.cs.wgsl?raw';
+import rcBorderRaw from './radiance_cascades/rc_border.cs.wgsl?raw';
 
 // NRC shaders
 import nrcCommonRaw from './nrc/nrc_common.wgsl?raw';
@@ -101,11 +105,17 @@ export const constants = {
 
     lightRadius: 2,
 
+    // Radiance Cascades
+    rcProbeGridX: 8,
+    rcProbeGridY: 8,
+    rcProbeGridZ: 8,
+    rcIrradianceTexels: 8,
+
     // DDGI
-    ddgiProbeGridX: 8,
-    ddgiProbeGridY: 8,
-    ddgiProbeGridZ: 8,
-    ddgiRaysPerProbe: 64,
+    ddgiProbeGridX: 24,
+    ddgiProbeGridY: 16,
+    ddgiProbeGridZ: 24,
+    ddgiRaysPerProbe: 256,
     ddgiIrradianceTexels: 8,
     ddgiVisibilityTexels: 16,
 
@@ -141,6 +151,8 @@ function evalShaderRaw(raw: string) {
     .replace(/\$\{ddgiRaysPerProbe\}/g, constants.ddgiRaysPerProbe.toString())
     .replace(/\$\{ddgiIrradianceTexels\}/g, constants.ddgiIrradianceTexels.toString())
     .replace(/\$\{ddgiVisibilityTexels\}/g, constants.ddgiVisibilityTexels.toString())
+
+    .replace(/\$\{rcIrradianceTexels\}/g, constants.rcIrradianceTexels.toString())
     .replace(/\$\{nrcMaxTrainingSamples\}/g, constants.nrcMaxTrainingSamples.toString());
 }
 
@@ -211,11 +223,15 @@ export const volumetricLightingVertSrc: string = processShaderRaw(volumetricLigh
 export const volumetricLightingFragSrc: string = processShaderRaw(volumetricLightingFragRaw);
 export const volumetricCompositeFragSrc: string = processShaderRaw(volumetricCompositeFragRaw);
 
-// DDGI shaders (need common for structs/utilities)
+// DDGI shaders (need common)
 export const ddgiProbeTraceSrc: string = processShaderRaw(ddgiProbeTraceRaw);
 export const ddgiIrradianceUpdateSrc: string = processShaderRaw(ddgiIrradianceUpdateRaw);
 export const ddgiVisibilityUpdateSrc: string = processShaderRaw(ddgiVisibilityUpdateRaw);
-export const ddgiBorderUpdateSrc: string = ddgiBorderUpdateRaw; // standalone, no common
+export const ddgiBorderUpdateSrc: string = ddgiBorderUpdateRaw;
+
+// Radiance Cascades shaders
+export const rcTraceSrc: string = processShaderRaw(rcTraceRaw);
+export const rcBorderSrc: string = rcBorderRaw;
 
 // Shadow shaders (standalone)
 export const shadowVertSrc: string = shadowVertRaw;

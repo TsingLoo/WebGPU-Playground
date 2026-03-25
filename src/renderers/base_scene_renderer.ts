@@ -1,7 +1,7 @@
 import * as renderer from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
-import { DDGI } from '../stage/ddgi';
+import { RadianceCascades } from '../stage/radiance_cascades';
 import { VSM } from '../stage/vsm';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
@@ -62,7 +62,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     ssaoBlurBindGroup: GPUBindGroup;
     ssaoBlurPipeline: GPURenderPipeline;
 
-    ddgi: DDGI;
+    radianceCascades: RadianceCascades;
     // Replaced NRC and Surfel with Dummy
     vsm: VSM;
     protected stageEnv: import('../stage/environment').Environment;
@@ -74,7 +74,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         const gBufSize = [renderer.canvas.width, renderer.canvas.height];
         this.stageEnv = stage.environment;
         this.stage = stage;
-        this.ddgi = stage.ddgi;
+        this.radianceCascades = stage.radianceCascades;
         // Dummy texture and buffer for unused NRC and Surfel bindings
         const dummyTex = renderer.device.createTexture({
             size: [1, 1], format: 'rgba16float',
@@ -493,7 +493,14 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 encoder, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
                 this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
             );
-            this.ddgi.updateUniforms();
+        }
+        
+        if (this.stage.radianceCascades.enabled) {
+            this.stage.radianceCascades.update(
+                encoder, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
+                this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
+            );
+            this.radianceCascades.updateUniforms();
         }
 
         // 6. Light Clustering Reset & Compute
