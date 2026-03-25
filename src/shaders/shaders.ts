@@ -1,6 +1,7 @@
 // CHECKITOUT: this file loads all the shaders and preprocesses them with some common code
 
 import commonRaw from './common.wgsl?raw';
+import giEvaluationRaw from './gi_evaluation.wgsl?raw';
 
 import naiveVertRaw from './naive.vs.wgsl?raw';
 import naiveFragRaw from './naive.fs.wgsl?raw';
@@ -142,9 +143,10 @@ function evalShaderRaw(raw: string) {
 }
 
 const commonSrc: string = evalShaderRaw(commonRaw);
+const giEvaluationSrc: string = evalShaderRaw(giEvaluationRaw);
 
 function processShaderRaw(raw: string) {
-    return commonSrc + evalShaderRaw(raw);
+    return commonSrc + giEvaluationSrc + evalShaderRaw(raw);
 }
 
 export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);

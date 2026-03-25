@@ -14,24 +14,24 @@
 @group(${bindGroup_scene}) @binding(12) var prefilteredMap: texture_cube<f32>;
 @group(${bindGroup_scene}) @binding(13) var brdfLutTex: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(14) var iblSampler: sampler;
-@group(${bindGroup_scene}) @binding(15) var ddgiIrradianceAtlas: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(16) var ddgiVisibilityAtlas: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(17) var<uniform> ddgiParams: DDGIUniforms;
-@group(${bindGroup_scene}) @binding(18) var ddgiSampler: sampler;
-@group(${bindGroup_scene}) @binding(19) var<uniform> sunLight: SunLight;
-@group(${bindGroup_scene}) @binding(20) var vsmPhysAtlas: texture_depth_2d;
-@group(${bindGroup_scene}) @binding(21) var<storage, read> vsmPageTable: array<u32>;
-@group(${bindGroup_scene}) @binding(22) var<uniform> vsmUniforms: VSMUniforms;
+@group(1) @binding(0) var ddgiIrradianceAtlas: texture_2d<f32>;
+@group(1) @binding(1) var ddgiVisibilityAtlas: texture_2d<f32>;
+@group(1) @binding(2) var<uniform> ddgiParams: DDGIUniforms;
+@group(1) @binding(3) var ddgiSampler: sampler;
+@group(${bindGroup_scene}) @binding(15) var<uniform> sunLight: SunLight;
+@group(${bindGroup_scene}) @binding(16) var vsmPhysAtlas: texture_depth_2d;
+@group(${bindGroup_scene}) @binding(17) var<storage, read> vsmPageTable: array<u32>;
+@group(${bindGroup_scene}) @binding(18) var<uniform> vsmUniforms: VSMUniforms;
 // NRC bindings
-@group(${bindGroup_scene}) @binding(23) var nrcInferenceTex: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(24) var<uniform> nrcParams: NRCUniforms;
+@group(${bindGroup_scene}) @binding(19) var nrcInferenceTex: texture_2d<f32>;
+@group(${bindGroup_scene}) @binding(20) var<uniform> nrcParams: NRCUniforms;
 
 // Surfel GI binding
-@group(${bindGroup_scene}) @binding(25) var surfelIrradianceTex: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(26) var<uniform> surfelParams: vec4f; // .x = enabled, .y = intensity
+@group(${bindGroup_scene}) @binding(21) var surfelIrradianceTex: texture_2d<f32>;
+@group(${bindGroup_scene}) @binding(22) var<uniform> surfelParams: vec4f; // .x = enabled, .y = intensity
 
 // SSAO binding
-@group(${bindGroup_scene}) @binding(27) var ssaoTex: texture_2d<f32>;
+@group(${bindGroup_scene}) @binding(23) var ssaoTex: texture_2d<f32>;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(
@@ -137,63 +137,7 @@ fn main(
     var diffuseAmbient = vec3f(0.0);
     if (ddgiParams.ddgi_enabled.x > 0.5) {
         // Inline DDGI irradiance sampling (trilinear probe interpolation + Chebyshev visibility)
-        let ddgi_spacing = ddgiParams.grid_spacing.xyz;
-        let ddgi_gridMin = ddgiParams.grid_min.xyz;
-        let ddgi_normalBias = ddgiParams.hysteresis.z;
-        let ddgi_viewBias = ddgiParams.hysteresis.w;
-        let ddgi_biasedPos = pos_world + N * ddgi_normalBias + V * ddgi_viewBias;
-        let ddgi_fractIdx = (ddgi_biasedPos - ddgi_gridMin) / ddgi_spacing;
-        let ddgi_baseIdx = vec3i(floor(ddgi_fractIdx));
-        let ddgi_alpha = ddgi_fractIdx - floor(ddgi_fractIdx);
-
-        var ddgi_totalIrr = vec3f(0.0);
-        var ddgi_totalW = 0.0;
-
-        for (var dz = 0; dz < 2; dz++) {
-            for (var dy = 0; dy < 2; dy++) {
-                for (var dx = 0; dx < 2; dx++) {
-                    let p_offset = vec3i(dx, dy, dz);
-                    let p_gridIdx = clamp(ddgi_baseIdx + p_offset, vec3i(0), ddgiParams.grid_count.xyz - vec3i(1));
-                    let p_pos = ddgiProbePosition(p_gridIdx, ddgiParams);
-                    let p_idx = ddgiProbeLinearIndex(p_gridIdx, ddgiParams);
-
-                    let p_dir = ddgi_biasedPos - p_pos;
-                    let p_dist = length(p_dir);
-                    let p_dirN = select(N, normalize(p_dir), p_dist > 0.001);
-
-                    let p_wrap = (dot(p_dirN, N) + 1.0) * 0.5;
-                    if (p_wrap <= 0.0) { continue; }
-
-                    let p_tri = vec3f(
-                        select(1.0 - ddgi_alpha.x, ddgi_alpha.x, dx == 1),
-                        select(1.0 - ddgi_alpha.y, ddgi_alpha.y, dy == 1),
-                        select(1.0 - ddgi_alpha.z, ddgi_alpha.z, dz == 1)
-                    );
-                    var p_w = p_tri.x * p_tri.y * p_tri.z;
-
-                    // Chebyshev visibility
-                    let p_visUV = ddgiVisibilityTexelCoord(p_idx, octEncode(p_dirN), ddgiParams);
-                    let p_vis = textureSampleLevel(ddgiVisibilityAtlas, ddgiSampler, p_visUV, 0.0).rg;
-                    if (p_dist > p_vis.x) {
-                        let p_var = max(p_vis.y - p_vis.x * p_vis.x, 0.0001);
-                        let p_d = p_dist - p_vis.x;
-                        let p_cheb = p_var / (p_var + p_d * p_d);
-                        p_w *= max(p_cheb * p_cheb * p_cheb, 0.0);
-                    }
-
-                    p_w *= p_wrap;
-                    p_w = max(p_w, 0.0001);
-
-                    let p_irrUV = ddgiIrradianceTexelCoord(p_idx, octEncode(N), ddgiParams);
-                    let p_irr_encoded = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, p_irrUV, 0.0).rgb;
-                    let p_irr = pow(clamp(p_irr_encoded, vec3f(0.0), vec3f(1.0)), vec3f(5.0));
-                    let p_irr_clamped = min(p_irr, vec3f(10.0));
-                    ddgi_totalIrr += p_irr_clamped * p_w;
-                    ddgi_totalW += p_w;
-                }
-            }
-        }
-        if (ddgi_totalW > 0.0) { ddgi_totalIrr /= ddgi_totalW; }
+        let ddgi_totalIrr = evaluateDDGI(pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
 
         let ddgiBounce = ddgi_totalIrr * albedo;
         let iblFill = iblIrradiance * albedo * 0.3;
@@ -202,20 +146,15 @@ fn main(
         // NRC mode: sample the neural radiance cache inference texture
         // Map global_id back to screen UV
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
-        let nrcTexSize = textureDimensions(nrcInferenceTex);
-        let nrcCoord = vec2i(i32(screenUV.x * f32(nrcTexSize.x)), i32(screenUV.y * f32(nrcTexSize.y)));
-        let nrcIrradiance = textureLoad(nrcInferenceTex, nrcCoord, 0).rgb;
+        let nrcIrradiance = evaluateNRC(screenUV, nrcInferenceTex);
         // NRC provides cached irradiance; apply albedo modulation
         let nrcBounce = nrcIrradiance * albedo;
         let iblFloor2 = iblIrradiance * albedo * 0.15;
         diffuseAmbient = max(nrcBounce, iblFloor2);
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
-        let surfelTexSize = textureDimensions(surfelIrradianceTex);
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(screen_width, screen_height);
-        let surfelCoord = vec2i(i32(screenUV.x * f32(surfelTexSize.x)), i32(screenUV.y * f32(surfelTexSize.y)));
-        
-        let surfelIrradiance = textureLoad(surfelIrradianceTex, surfelCoord, 0).rgb;
+        let surfelIrradiance = evaluateSurfel(screenUV, surfelIrradianceTex);
         let surfelBounce = surfelIrradiance * albedo * surfelParams.y; // apply intensity
         let iblFloor3 = iblIrradiance * albedo * 0.05;
         diffuseAmbient = max(surfelBounce, iblFloor3);
