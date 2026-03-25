@@ -82,14 +82,16 @@ The skybox is rendered as a fullscreen pass with reverse depth (`less-equal`), s
 
 ---
 
-## Dynamic Diffuse Global Illumination (DDGI)
+## Probe-Based Global Illumination (DDGI-style)
 
-A probe-based DDGI system provides real-time diffuse global illumination. A configurable 3D probe grid is placed over the scene, and each frame the probes are updated through a multi-pass compute pipeline:
+A probe-based diffuse GI system inspired by DDGI. The overall framework -- probe grid, irradiance/visibility octahedral atlases, hysteresis blending, Chebyshev visibility weighting -- follows the standard DDGI pipeline, but the probe ray tracing stage differs from the original significantly: since WebGPU does not currently expose hardware ray tracing, rays are traced against a **pre-voxelized 128x128x128 3D grid** of the scene using a fixed-step DDA ray march, rather than intersecting actual triangle geometry via RT cores. Hit shading also uses a **fixed 50% grey albedo proxy** instead of reading real material properties from the hit surface.
 
-1. **Probe Trace** -- Each probe fires rays into a voxelized scene representation to gather radiance samples. The trace accounts for sun light, VSM shadows, and environment lighting.
-2. **Irradiance Update** -- Ray results are blended into the irradiance atlas using exponential hysteresis, with octahedral encoding per probe.
-3. **Visibility Update** -- Mean distance and squared distance are similarly accumulated for Chebyshev-based visibility testing.
-4. **Ping-Pong Atlases** -- Double-buffered atlas textures prevent read-write hazards in the update passes.
+The per-frame compute pipeline consists of:
+
+1. **Probe Trace (Voxel DDA)** -- Each probe fires rays through the voxel grid. On hit, the voxel's encoded normal is used for direct sun lighting (with VSM shadow lookup). Missed rays sample the environment cubemap.
+2. **Irradiance Update** -- Ray radiance results are blended into the irradiance atlas using exponential hysteresis, with octahedral encoding per probe.
+3. **Visibility Update** -- Mean distance and squared distance are accumulated for Chebyshev-based visibility testing.
+4. **Ping-Pong Atlases** -- Double-buffered atlas textures prevent read-write hazards across frames.
 
 During shading, each fragment performs trilinear interpolation across the 8 surrounding probes, weighted by Chebyshev visibility to suppress light leaking.
 
