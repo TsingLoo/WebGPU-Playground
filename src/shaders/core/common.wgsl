@@ -345,6 +345,10 @@ fn calculateShadowVSMSimple(
 // DDGI
 // ============================
 
+// ============================
+// DDGI
+// ============================
+
 struct DDGIUniforms {
     grid_count: vec4i,       // x, y, z, total
     grid_min: vec4f,         // world-space min corner
@@ -354,45 +358,6 @@ struct DDGIUniforms {
     visibility_texel_size: vec4f, // texel_dim, texel_dim_with_border, atlas_width, atlas_height
     hysteresis: vec4f,       // irradiance_hysteresis, visibility_hysteresis, normal_bias, view_bias
     ddgi_enabled: vec4f,     // x = enabled (0 or 1), y = debug_mode (0=off,1=irr,2=vis)
-}
-
-// ============================
-// NRC (Neural Radiance Caching)
-// ============================
-struct NRCUniforms {
-    scene_min: vec4f,          // xyz = scene AABB min, w = enabled (0/1)
-    scene_max: vec4f,          // xyz = scene AABB max, w = debug_mode
-    params: vec4f,             // x = learning_rate, y = num_training_samples, z = momentum, w = frame_count
-    screen_dims: vec4f,        // x = width, y = height, z = sample_stride_x, w = sample_stride_y
-}
-
-// Octahedral encoding: map direction to [0,1]^2
-fn octEncode(n: vec3f) -> vec2f {
-    let sum = abs(n.x) + abs(n.y) + abs(n.z);
-    var oct = vec2f(n.x, n.y) / sum;
-    if (n.z < 0.0) {
-        let signs = vec2f(
-            select(-1.0, 1.0, oct.x >= 0.0),
-            select(-1.0, 1.0, oct.y >= 0.0)
-        );
-        oct = (1.0 - abs(vec2f(oct.y, oct.x))) * signs;
-    }
-    return oct * 0.5 + 0.5;
-}
-
-// Octahedral decoding: map [0,1]^2 to direction
-fn octDecode(uv: vec2f) -> vec3f {
-    var f = uv * 2.0 - 1.0;
-    var n = vec3f(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    if (n.z < 0.0) {
-        let signs = vec2f(
-            select(-1.0, 1.0, n.x >= 0.0),
-            select(-1.0, 1.0, n.y >= 0.0)
-        );
-        let xy = (1.0 - abs(vec2f(n.y, n.x))) * signs;
-        n = vec3f(xy.x, xy.y, n.z);
-    }
-    return normalize(n);
 }
 
 // Get world-space position of a probe given its 3D grid index
@@ -456,3 +421,50 @@ fn ddgiProbeLinearIndex(gridIdx: vec3i, ddgi: DDGIUniforms) -> i32 {
          + gridIdx.x;
 }
 
+struct RCUniforms {
+    grid_count: vec4i,
+    grid_min: vec4f,
+    grid_max: vec4f,
+    grid_spacing: vec4f,
+    atlas_dims: vec4f,
+    params: vec4f, // x = hysteresis, y = intensity, z = ambient, w = enabled
+}
+
+// ============================
+// NRC (Neural Radiance Caching)
+// ============================
+struct NRCUniforms {
+    scene_min: vec4f,          // xyz = scene AABB min, w = enabled (0/1)
+    scene_max: vec4f,          // xyz = scene AABB max, w = debug_mode
+    params: vec4f,             // x = learning_rate, y = num_training_samples, z = momentum, w = frame_count
+    screen_dims: vec4f,        // x = width, y = height, z = sample_stride_x, w = sample_stride_y
+}
+
+// Octahedral encoding: map direction to [0,1]^2
+fn octEncode(n: vec3f) -> vec2f {
+    let sum = abs(n.x) + abs(n.y) + abs(n.z);
+    var oct = vec2f(n.x, n.y) / sum;
+    if (n.z < 0.0) {
+        let signs = vec2f(
+            select(-1.0, 1.0, oct.x >= 0.0),
+            select(-1.0, 1.0, oct.y >= 0.0)
+        );
+        oct = (1.0 - abs(vec2f(oct.y, oct.x))) * signs;
+    }
+    return oct * 0.5 + 0.5;
+}
+
+// Octahedral decoding: map [0,1]^2 to direction
+fn octDecode(uv: vec2f) -> vec3f {
+    var f = uv * 2.0 - 1.0;
+    var n = vec3f(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0) {
+        let signs = vec2f(
+            select(-1.0, 1.0, n.x >= 0.0),
+            select(-1.0, 1.0, n.y >= 0.0)
+        );
+        let xy = (1.0 - abs(vec2f(n.y, n.x))) * signs;
+        n = vec3f(xy.x, xy.y, n.z);
+    }
+    return normalize(n);
+}

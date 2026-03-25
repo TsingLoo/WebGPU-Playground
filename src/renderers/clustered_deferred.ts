@@ -101,7 +101,10 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, sampler: {} }
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, sampler: {} },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, sampler: {} }
             ]
         });
 
@@ -165,10 +168,13 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
             label: "GI dynamic bind group",
             layout: this.giDynamicBindGroupLayout,
             entries: [
-                { binding: 0, resource: this.ddgi.getCurrentIrradianceView() },
-                { binding: 1, resource: this.ddgi.getCurrentVisibilityView() },
-                { binding: 2, resource: { buffer: this.ddgi.ddgiUniformBuffer } },
-                { binding: 3, resource: this.ddgi.ddgiSampler }
+                { binding: 0, resource: this.stage.ddgi.getCurrentIrradianceView() },
+                { binding: 1, resource: this.stage.ddgi.getCurrentVisibilityView() },
+                { binding: 2, resource: { buffer: this.stage.ddgi.ddgiUniformBuffer } },
+                { binding: 3, resource: this.stage.ddgi.ddgiSampler },
+                { binding: 4, resource: this.stage.radianceCascades.getCurrentIrradianceView() },
+                { binding: 5, resource: { buffer: this.stage.radianceCascades.rcUniformBuffer } },
+                { binding: 6, resource: this.stage.radianceCascades.rcSampler }
             ]
         });
     }

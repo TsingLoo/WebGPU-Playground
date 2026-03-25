@@ -18,6 +18,10 @@
 @group(1) @binding(1) var ddgiVisibilityAtlas: texture_2d<f32>;
 @group(1) @binding(2) var<uniform> ddgiParams: DDGIUniforms;
 @group(1) @binding(3) var ddgiSampler: sampler;
+
+@group(1) @binding(4) var rcIrradianceAtlas: texture_2d<f32>;
+@group(1) @binding(5) var<uniform> rcParams: RCUniforms;
+@group(1) @binding(6) var rcSampler: sampler;
 @group(${bindGroup_scene}) @binding(15) var<uniform> sunLight: SunLight;
 @group(${bindGroup_scene}) @binding(16) var vsmPhysAtlas: texture_depth_2d;
 @group(${bindGroup_scene}) @binding(17) var<storage, read> vsmPageTable: array<u32>;
@@ -133,18 +137,21 @@ fn main(
     let brdfVal = textureSampleLevel(brdfLutTex, iblSampler, vec2f(NdotV, roughness), 0.0).rg;
     let specularIBL = prefilteredColor * (F * brdfVal.x + brdfVal.y);
 
-    // Build ambient: scale IBL independently from DDGI
+    // Build ambient: scale IBL independently from RC
     var diffuseAmbient = vec3f(0.0);
     if (ddgiParams.ddgi_enabled.x > 0.5) {
-        // Inline DDGI irradiance sampling (trilinear probe interpolation + Chebyshev visibility)
         let ddgi_totalIrr = evaluateDDGI(pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
+        diffuseAmbient = ddgi_totalIrr * albedo;
+    } else if (rcParams.params.w > 0.5) {
+        // Evaluate Radiance Cascades
+        let rc_totalIrr = evaluateRCProbes(pos_world, N, V, rcParams, rcIrradianceAtlas, rcSampler);
 
         let scr_w = f32(clusterSet.screen_width);
         let scr_h = f32(clusterSet.screen_height);
         let fragcoord_xy = vec2f(fragcoordi) + vec2f(0.5);
         diffuseAmbient = evaluateHybridSSGI(
-            fragcoord_xy, pos_world, N, albedo, ddgi_totalIrr, iblIrradiance,
-            camera, scr_w, scr_h, positionTex, albedoTex, ddgiParams.ddgi_enabled.w
+            fragcoord_xy, pos_world, N, albedo, rc_totalIrr, iblIrradiance,
+            camera, scr_w, scr_h, positionTex, albedoTex, rcParams.params.w 
         );
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode: sample the neural radiance cache inference texture
@@ -167,8 +174,9 @@ fn main(
         diffuseAmbient = iblIrradiance * albedo * 1.0;
     }
 
-    // Combine: DDGI diffuse (unscaled) + specular IBL (scaled down when DDGI is active)
-    let specIBLScale = select(0.6, 0.0, ddgiParams.ddgi_enabled.x > 0.5);
+    // Combine: GI diffuse (unscaled) + specular IBL
+    let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
+    let specIBLScale = select(0.6, 0.0, isGIActive);
     let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
     let finalColor = ambient + Lo;
 

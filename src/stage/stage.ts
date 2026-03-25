@@ -1,5 +1,6 @@
 import { device } from "../renderer";
 import { Camera } from "./camera";
+import { RadianceCascades } from "./radiance_cascades";
 import { DDGI } from "./ddgi";
 import { Environment } from "./environment";
 import { Lights } from "./lights";
@@ -14,6 +15,7 @@ export class Stage {
     stats: Stats;
     environment: Environment;
     ddgi: DDGI;
+    radianceCascades: RadianceCascades;
     vsm: VSM;
     ssao: SSAO;
 
@@ -37,6 +39,7 @@ export class Stage {
         this.stats = stats;
         this.environment = environment;
         this.ddgi = new DDGI(this.camera, this.environment);
+        this.radianceCascades = new RadianceCascades(this.camera, this.environment);
         this.vsm = new VSM(this.camera);
         this.ssao = new SSAO();
 

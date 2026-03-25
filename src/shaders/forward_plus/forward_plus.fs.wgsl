@@ -11,6 +11,10 @@
 @group(3) @binding(1) var ddgiVisibilityAtlas: texture_2d<f32>;
 @group(3) @binding(2) var<uniform> ddgiParams: DDGIUniforms;
 @group(3) @binding(3) var ddgiSampler: sampler;
+
+@group(3) @binding(4) var rcIrradianceAtlas: texture_2d<f32>;
+@group(3) @binding(5) var<uniform> rcParams: RCUniforms;
+@group(3) @binding(6) var rcSampler: sampler;
 @group(${bindGroup_scene}) @binding(9) var<uniform> sunLight: SunLight;
 // VSM bindings
 @group(${bindGroup_scene}) @binding(10) var vsmPhysAtlas: texture_depth_2d;
@@ -126,18 +130,14 @@ fn main(in: FragmentInput) -> @location(0) vec4f
     let brdf = textureSampleLevel(brdfLut, iblSampler, vec2f(NdotV, roughness), 0.0).rg;
     let specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
 
-    // Build ambient: scale IBL independently from DDGI
+    // Build ambient: scale IBL independently from DDGI/RC
     var diffuseAmbient = vec3f(0.0);
     if (ddgiParams.ddgi_enabled.x > 0.5) {
-        // Inline DDGI irradiance sampling (trilinear probe interpolation + Chebyshev visibility)
         let ddgi_totalIrr = evaluateDDGI(in.pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
-
-        let scr_w = f32(clusterSet.screen_width);
-        let scr_h = f32(clusterSet.screen_height);
-        diffuseAmbient = evaluateHybridSSGI(
-            in.fragcoord.xy, in.pos_world, N, albedo, ddgi_totalIrr, iblIrradiance,
-            camera, scr_w, scr_h, gBufferPosition, gBufferAlbedo, ddgiParams.ddgi_enabled.w
-        );
+        diffuseAmbient = ddgi_totalIrr * albedo;
+    } else if (rcParams.params.w > 0.5) {
+        let rc_totalIrr = evaluateRCProbes(in.pos_world, N, V, rcParams, rcIrradianceAtlas, rcSampler);
+        diffuseAmbient = rc_totalIrr * albedo;
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode: sample the neural radiance cache inference texture
         let screenUV = in.fragcoord.xy / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
@@ -167,94 +167,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         diffuseAmbient = iblIrradiance * albedo * 1.0;
     }
 
-    // ---- DDGI Debug Visualization ----
-    let debugMode = i32(ddgiParams.ddgi_enabled.y);
-    if (debugMode == 1) {
-        // Mode 1: Raw DDGI irradiance (should NOT be black if probes have data)
-        if (ddgiParams.ddgi_enabled.x > 0.5) {
-            // Re-sample center probe for this fragment to show raw irradiance
-            let dbg_spacing = ddgiParams.grid_spacing.xyz;
-            let dbg_gridMin = ddgiParams.grid_min.xyz;
-            let dbg_fractIdx = (in.pos_world - dbg_gridMin) / dbg_spacing;
-            let dbg_baseIdx = clamp(vec3i(floor(dbg_fractIdx)), vec3i(0), ddgiParams.grid_count.xyz - vec3i(1));
-            let dbg_probeIdx = ddgiProbeLinearIndex(dbg_baseIdx, ddgiParams);
-            let dbg_irrUV = ddgiIrradianceTexelCoord(dbg_probeIdx, octEncode(N), ddgiParams);
-            let dbg_raw = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, dbg_irrUV, 0.0).rgb;
-            // Show raw atlas value (gamma-encoded) amplified
-            return vec4f(dbg_raw * 3.0, 1.0);
-        }
-        return vec4f(1.0, 0.0, 1.0, 1.0); // Magenta = DDGI disabled
-    }
-    if (debugMode == 2) {
-        // Mode 2: Decoded DDGI irradiance (trilinear sampled, after pow 5)
-        if (ddgiParams.ddgi_enabled.x > 0.5) {
-            let dbg2_spacing = ddgiParams.grid_spacing.xyz;
-            let dbg2_gridMin = ddgiParams.grid_min.xyz;
-            let dbg2_fractIdx = (in.pos_world - dbg2_gridMin) / dbg2_spacing;
-            let dbg2_baseIdx = clamp(vec3i(floor(dbg2_fractIdx)), vec3i(0), ddgiParams.grid_count.xyz - vec3i(1));
-            let dbg2_probeIdx = ddgiProbeLinearIndex(dbg2_baseIdx, ddgiParams);
-            let dbg2_irrUV = ddgiIrradianceTexelCoord(dbg2_probeIdx, octEncode(N), ddgiParams);
-            let dbg2_encoded = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, dbg2_irrUV, 0.0).rgb;
-            let dbg2_decoded = pow(max(dbg2_encoded, vec3f(0.0)), vec3f(5.0));
-            let dbg2_mapped = dbg2_decoded / (dbg2_decoded + vec3f(1.0));
-            return vec4f(pow(dbg2_mapped, vec3f(1.0/2.2)), 1.0);
-        }
-        return vec4f(0.0, 1.0, 1.0, 1.0); // Cyan = no DDGI data
-    }
-    if (debugMode == 3) {
-        // Mode 3: IBL irradiance only
-        let dbg_ibl = iblIrradiance;
-        let dbg_mapped2 = dbg_ibl / (dbg_ibl + vec3f(1.0));
-        return vec4f(pow(dbg_mapped2, vec3f(1.0/2.2)), 1.0);
-    }
-    if (debugMode == 4) {
-        // Mode 4: Final mapped world-space normal as RGB
-        return vec4f(N * 0.5 + 0.5, 1.0);
-    }
-    if (debugMode == 5) {
-        // Mode 5: Vertex normal (before normal mapping) as RGB
-        return vec4f(vertexNormal * 0.5 + 0.5, 1.0);
-    }
-    if (debugMode == 6) {
-        // Mode 6: Tangent vector as RGB
-        return vec4f(normalize(in.tangent_world.xyz) * 0.5 + 0.5, 1.0);
-    }
-    if (debugMode == 7) {
-        // Mode 7: NdotL (sun) - bright = facing sun, dark = away
-        let sunDir = normalize(sunLight.direction.xyz);
-        let ndotl = max(dot(N, sunDir), 0.0);
-        return vec4f(vec3f(ndotl), 1.0);
-    }
-    if (debugMode == 8) {
-        // Mode 8: DDGI Probe Grid visualization
-        // Show probe positions as colored dots overlaid on the scene
-        let spacing = ddgiParams.grid_spacing.xyz;
-        let gridMin = ddgiParams.grid_min.xyz;
-        let relPos = (in.pos_world - gridMin) / spacing;
-        let nearestProbe = round(relPos);
-        let probePos = gridMin + nearestProbe * spacing;
-        let distToProbe = length(in.pos_world - probePos);
-        let probeRadius = min(min(spacing.x, spacing.y), spacing.z) * 0.08;
-        if (distToProbe < probeRadius) {
-            // Color by grid position
-            let gridIdx = vec3i(nearestProbe);
-            let col = vec3f(
-                f32(gridIdx.x % 2),
-                f32(gridIdx.y % 2),
-                f32(gridIdx.z % 2)
-            ) * 0.5 + 0.5;
-            return vec4f(col, 1.0);
-        }
-        // Show faded version of normal scene + grid lines
-        let gridFrac = fract(relPos);
-        let gridLine = step(vec3f(0.95), gridFrac) + step(gridFrac, vec3f(0.05));
-        let isGrid = max(max(gridLine.x, gridLine.y), gridLine.z);
-        if (isGrid > 0.0) {
-            return vec4f(0.0, 1.0, 1.0, 1.0); // Cyan grid lines
-        }
-        // Darken non-grid pixels slightly for contrast
-        return vec4f(albedo * 0.3, 1.0);
-    }
+    // DDGI debug visualization removed since Radiance Cascades do not require it
 
     // ---- NRC Debug Visualization ----
     if (nrcParams.scene_min.w > 0.5) {
@@ -279,10 +192,9 @@ fn main(in: FragmentInput) -> @location(0) vec4f
     }
 
     // Combine: diffuse ambient + specular IBL
-    // When DDGI is on, reduce specular IBL since the cubemap doesn't match interior lighting
-    // DDGI only provides diffuse indirect; specular IBL from outdoor cubemap
-    // creates unrealistic reflections on interior surfaces, so disable it with DDGI
-    let specIBLScale = select(0.6, 0.0, ddgiParams.ddgi_enabled.x > 0.5);
+    // Distant reflection usually doesn't match interior lighting, scale it down if GI is active
+    let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
+    let specIBLScale = select(0.6, 0.0, isGIActive);
     let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
 
     let finalColor = ambient + Lo;
