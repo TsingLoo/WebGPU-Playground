@@ -1,661 +1,52 @@
 import * as renderer from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
-import { DDGI } from '../stage/ddgi';
-import { NRC } from '../stage/nrc';
-import { VSM } from '../stage/vsm';
+import { BaseSceneRenderer } from './base_scene_renderer';
 
-export class ForwardPlusRenderer extends renderer.Renderer {
-    depthTexture: GPUTexture;
-    depthTextureView: GPUTextureView;
-
-    tileOffsetsDeviceBuffer: GPUBuffer;
-    globalLightIndicesDeviceBuffer: GPUBuffer;
-    zeroDeviceBuffer: GPUBuffer;
-
-    clusterSetDeviceBuffer: GPUBuffer;
-
-    zPrepassPipeline: GPURenderPipeline;
-
-    cullingBindGroupLayout: GPUBindGroupLayout;
-    cullingBindGroup: GPUBindGroup;
-    cullingPipeline: GPUComputePipeline;
-
-    shadingBindGroupLayout: GPUBindGroupLayout; 
-    shadingBindGroup!: GPUBindGroup;
-    shadingPipeline: GPURenderPipeline;
-
-    skyboxPipeline: GPURenderPipeline;
-    skyboxBindGroupLayout: GPUBindGroupLayout;
-    skyboxBindGroup: GPUBindGroup;
-
-    // Volumetric Lighting
-    volumetricTexture: GPUTexture;
-    volumetricTextureView: GPUTextureView;
-    volumetricPipeline: GPURenderPipeline;
-    volumetricBindGroupLayout: GPUBindGroupLayout;
-    volumetricBindGroup!: GPUBindGroup;
+export class ForwardPlusRenderer extends BaseSceneRenderer {
+    shadingStaticBindGroupLayout: GPUBindGroupLayout; 
+    shadingStaticBindGroup: GPUBindGroup;
     
-    volumetricCompositePipeline: GPURenderPipeline;
-    volumetricCompositeBindGroupLayout: GPUBindGroupLayout;
-    volumetricCompositeBindGroup!: GPUBindGroup;
+    giDynamicBindGroupLayout: GPUBindGroupLayout;
+    giDynamicBindGroup!: GPUBindGroup;
 
-    ssaoTexture: GPUTexture;
-    ssaoTextureView: GPUTextureView;
-    ssaoBlurredTexture: GPUTexture;
-    ssaoBlurredTextureView: GPUTextureView;
-
-    ssaoBindGroupLayout: GPUBindGroupLayout;
-    ssaoBindGroup: GPUBindGroup;
-    ssaoPipeline: GPURenderPipeline;
-
-    ssaoBlurBindGroupLayout: GPUBindGroupLayout;
-    ssaoBlurBindGroup: GPUBindGroup;
-    ssaoBlurPipeline: GPURenderPipeline;
-
-    // G-buffer for DDGI probe tracing
-    gBufferNormalTexture: GPUTexture;
-    gBufferNormalTextureView: GPUTextureView;
-    gBufferAlbedoTexture: GPUTexture;
-    gBufferAlbedoTextureView: GPUTextureView;
-    gBufferPositionTexture: GPUTexture;
-    gBufferPositionTextureView: GPUTextureView;
-    gBufferSpecularTexture: GPUTexture;
-    gBufferSpecularTextureView: GPUTextureView;
-
-    surfelIrradianceDeviceTexture: GPUTexture;
-    surfelIrradianceDeviceTextureView: GPUTextureView;
-    surfelParamsBuffer: GPUBuffer;
-
-    geometryBindGroupLayout: GPUBindGroupLayout;
-    geometryBindGroup: GPUBindGroup;
-    geometryPipeline: GPURenderPipeline;
-
-    ddgi: DDGI;
-    nrc: NRC;
-    vsm: VSM;
-    private stageEnv: import('../stage/environment').Environment;
-    private stage: import('../stage/stage').Stage;
+    shadingPipeline: GPURenderPipeline;
 
     constructor(stage: Stage) {
         super(stage);
-        this.depthTexture = renderer.device.createTexture({
-            size: [renderer.canvas.width, renderer.canvas.height],
-            format: "depth24plus",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.depthTextureView = this.depthTexture.createView();
 
-        const volWidth = Math.max(1, Math.floor(renderer.canvas.width / 2));
-        const volHeight = Math.max(1, Math.floor(renderer.canvas.height / 2));
-        this.volumetricTexture = renderer.device.createTexture({
-            label: "volumetric downsampled texture",
-            size: [volWidth, volHeight],
-            format: "rgba16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.volumetricTextureView = this.volumetricTexture.createView();
-
-        // G-buffer textures for DDGI probe tracing
-        const gBufSize = [renderer.canvas.width, renderer.canvas.height];
-        this.gBufferAlbedoTexture = renderer.device.createTexture({
-            label: "Forward+ G-Buffer Albedo (DDGI)",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferAlbedoTextureView = this.gBufferAlbedoTexture.createView();
-
-        this.gBufferNormalTexture = renderer.device.createTexture({
-            label: "Forward+ G-Buffer Normal (DDGI)",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferNormalTextureView = this.gBufferNormalTexture.createView();
-
-        this.gBufferPositionTexture = renderer.device.createTexture({
-            label: "Forward+ G-Buffer Position (DDGI)",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferPositionTextureView = this.gBufferPositionTexture.createView();
-
-        this.gBufferSpecularTexture = renderer.device.createTexture({
-            label: "Forward+ G-Buffer Specular (DDGI)",
-            size: gBufSize, format: 'rgba8unorm',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferSpecularTextureView = this.gBufferSpecularTexture.createView();
-
-        this.ssaoTexture = renderer.device.createTexture({
-            label: "Forward+ ssao texture",
-            size: gBufSize, format: "r16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.ssaoTextureView = this.ssaoTexture.createView();
-
-        this.ssaoBlurredTexture = renderer.device.createTexture({
-            label: "Forward+ ssao blurred texture",
-            size: gBufSize, format: "r16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.ssaoBlurredTextureView = this.ssaoBlurredTexture.createView();
-
-        this.surfelIrradianceDeviceTexture = renderer.device.createTexture({
-            label: "Forward+ Surfel Irradiance Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.surfelIrradianceDeviceTextureView = this.surfelIrradianceDeviceTexture.createView();
-        
-        this.surfelParamsBuffer = renderer.device.createBuffer({
-            label: "Forward+ Surfel params buffer",
-            size: 16,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        this.tileOffsetsDeviceBuffer = renderer.device.createBuffer({
-            size: shaders.constants.numTotalClustersConfig * 2 * 4,
-            usage: GPUBufferUsage.STORAGE,
-        })
-
-        this.zeroDeviceBuffer = renderer.device.createBuffer({
-            size: 4,
-            usage: GPUBufferUsage.COPY_SRC,
-            mappedAtCreation: true
-        });
-        new Uint32Array(this.zeroDeviceBuffer.getMappedRange()).set([0]);
-        this.zeroDeviceBuffer.unmap();
-
-        this.clusterSetDeviceBuffer = renderer.device.createBuffer({
-            size: 4 * 5,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            mappedAtCreation: true
-        });
-        const mappedRange = this.clusterSetDeviceBuffer.getMappedRange();
-        const uintView = new Uint32Array(mappedRange);
-
-        uintView[0] = renderer.canvas.width;
-        uintView[1] = renderer.canvas.height;
-        uintView[2] = shaders.constants.numClustersX;
-        uintView[3] = shaders.constants.numClustersY;
-        uintView[4] = shaders.constants.numClustersZ;
-        this.clusterSetDeviceBuffer.unmap();
-
-        const maxIndices = shaders.constants.numTotalClustersConfig * shaders.constants.averageLightsPerCluster;
-
-        this.globalLightIndicesDeviceBuffer = renderer.device.createBuffer({
-            size: 4 + maxIndices * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-            label: "global light indices buffer"
-        })
-
-        const env = stage.environment;
-        this.stageEnv = env;
-        this.ddgi = stage.ddgi;
-        this.nrc = stage.nrc;
-        this.vsm = stage.vsm;
-        this.stage = stage;
-
-        // Geometry bind group (camera only) for G-buffer pass
-        this.geometryBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "fwd+ geometry bind group layout",
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
-            ]
-        });
-        this.geometryBindGroup = renderer.device.createBindGroup({
-            label: "fwd+ geometry bind group",
-            layout: this.geometryBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } }
-            ]
-        });
-        this.geometryPipeline = renderer.device.createRenderPipeline({
-            label: "fwd+ geometry pipeline (DDGI)",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
-            }),
-            depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'equal' },
-            vertex: {
-                module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }),
-                buffers: [renderer.vertexBufferLayout]
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({ code: shaders.geometryFragSrc }),
-                entryPoint: 'main',
-                targets: [
-                    { format: 'rgba16float' },   // albedo
-                    { format: 'rgba16float' },  // normal
-                    { format: 'rgba16float' },  // position
-                    { format: 'rgba8unorm' },   // specular
-                ]
-            },
-            primitive: { topology: 'triangle-list', cullMode: 'back' }
-        });
-
-        // Shading bind group layout — now with VSM bindings
-        this.shadingBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "shading bind group layout",
-            entries: [
-                { // Camera Uniforms
-                    binding: 0,
-                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // Light Set
-                    binding: 1,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "read-only-storage" }
-                },
-                {   // Tile offsets
-                    binding: 2,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "read-only-storage" } 
-                },
-                {   // Global light indices
-                    binding: 3,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "read-only-storage" } 
-                },
-                {   // Cluster set
-                    binding: 4,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // Irradiance cubemap
-                    binding: 5,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float", viewDimension: "cube" }
-                },
-                {   // Prefiltered specular cubemap
-                    binding: 6,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float", viewDimension: "cube" }
-                },
-                {   // BRDF LUT
-                    binding: 7,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float" }
-                },
-                {   // IBL Sampler
-                    binding: 8,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    sampler: {}
-                },
-                {   // DDGI Irradiance Atlas
-                    binding: 9,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float" }
-                },
-                {   // DDGI Visibility Atlas
-                    binding: 10,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float" }
-                },
-                {   // DDGI Uniforms
-                    binding: 11,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // DDGI Sampler
-                    binding: 12,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    sampler: {}
-                },
-                {   // Sun Light
-                    binding: 13,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // VSM Physical Atlas (depth texture)
-                    binding: 14,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "depth" }
-                },
-                {   // VSM Comparison Sampler
-                    binding: 15,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    sampler: { type: "comparison" }
-                },
-                {   // VSM Page Table (read-only storage)
-                    binding: 16,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "read-only-storage" }
-                },
-                {   // VSM Uniforms
-                    binding: 17,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // NRC Inference Texture
-                    binding: 18,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float" }
-                },
-                {   // NRC Uniforms
-                    binding: 19,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // GBuffer Position
-                    binding: 20,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "unfilterable-float" }
-                },
-                {   // GBuffer Normal
-                    binding: 21,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "unfilterable-float" }
-                },
-                {   // GBuffer Albedo
-                    binding: 22,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "unfilterable-float" }
-                },
-                {   // Surfel Irradiance
-                    binding: 23,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "unfilterable-float" }
-                },
-                {   // Surfel Uniforms
-                    binding: 24,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                },
-                {   // SSAO Texture
-                    binding: 25,
-                    visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "unfilterable-float" }
-                }
-            ]
-        });
-
-        this.ssaoBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "ssao bgl",
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
-                { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-            ]
-        });
-        this.ssaoBindGroup = renderer.device.createBindGroup({
-            layout: this.ssaoBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                { binding: 1, resource: this.gBufferPositionTextureView },
-                { binding: 2, resource: this.gBufferNormalTextureView },
-                { binding: 3, resource: { buffer: this.stage.ssao.uniformsBuffer } },
-            ]
-        });
-        this.ssaoPipeline = renderer.device.createRenderPipeline({
-            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBindGroupLayout] }),
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
-            fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
-        });
-
-        this.ssaoBlurBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "ssao blur bgl",
-            entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } }]
-        });
-        this.ssaoBlurBindGroup = renderer.device.createBindGroup({
-            layout: this.ssaoBlurBindGroupLayout,
-            entries: [{ binding: 0, resource: this.ssaoTextureView }]
-        });
-        this.ssaoBlurPipeline = renderer.device.createRenderPipeline({
-            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBlurBindGroupLayout] }),
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
-            fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoBlurFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
-        });
-
-        this.zPrepassPipeline = renderer.device.createRenderPipeline({
-            label: "Z-Prepass pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [
-                    this.geometryBindGroupLayout,
-                    renderer.modelBindGroupLayout,
-                    renderer.materialBindGroupLayout
-                ]
-            }),
-            depthStencil: {
-                depthWriteEnabled: true,
-                depthCompare: "less",
-                format: "depth24plus"
-            },
-            vertex: {
-                module: renderer.device.createShaderModule({
-                    code: shaders.naiveVertSrc
-                }),
-                buffers: [ renderer.vertexBufferLayout ]
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({
-                    code: shaders.zPrepassFragSrc
-                }),
-                entryPoint: "main",
-                targets: [] 
-            }
-        });
-
-
-        this.cullingBindGroupLayout = renderer.device.createBindGroupLayout({
-        label: "culling bind group layout",
-        entries: [
-                {
-                    binding: 0,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: "uniform" }
-                },
-                {
-                    binding: 1,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: "read-only-storage" }
-                },
-                {
-                    binding: 2,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: "storage" } 
-                },
-                {
-                    binding: 3,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: "storage" } 
-                },
-                {
-                    binding: 4,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: "uniform" }
-                }
-            ]
-        })
-
-        this.cullingBindGroup = renderer.device.createBindGroup({
-            label: "culling bind group",
-            layout: this.cullingBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
-                { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
-                { binding: 2, resource: { buffer: this.tileOffsetsDeviceBuffer }},
-                { binding: 3, resource: { buffer: this.globalLightIndicesDeviceBuffer }},
-                { binding: 4, resource: { buffer: this.clusterSetDeviceBuffer }}
-            ]
-        });
-
-        this.cullingPipeline = renderer.device.createComputePipeline({
-            label: "culling compute pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [this.cullingBindGroupLayout]
-            }),
-            compute: {
-                module: renderer.device.createShaderModule({
-                    code: shaders.clusteringComputeSrc
-                }),
-                entryPoint: "main" 
-            }
-        });
-
-        // Initial shading bind group (will be recreated each frame for DDGI ping-pong)
-        this.createShadingBindGroup();
-
-        this.shadingPipeline = renderer.device.createRenderPipeline({
-            label: "Forward+ Shading Pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [
-                    this.shadingBindGroupLayout,
-                    renderer.modelBindGroupLayout,
-                    renderer.materialBindGroupLayout
-                ]
-            }),
-            depthStencil: {
-                depthWriteEnabled: false,
-                depthCompare: "equal",
-                format: "depth24plus"
-            },
-            vertex: {
-                module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }),
-                buffers: [ renderer.vertexBufferLayout ]
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({
-                    label: "Forward+ Shading Fragment",
-                    code: shaders.forwardPlusFragSrc,
-                }),
-                targets: [ { format: renderer.canvasFormat }]
-            }
-        });
-
-        // Skybox
-        this.skyboxBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "skybox bind group layout",
+        this.shadingStaticBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "shading static bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "cube" } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "cube" } },
+                { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "cube" } },
+                { binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+                // shifted from 13
+                { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+                { binding: 11, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+                { binding: 12, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 13, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 14, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 15, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 16, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 17, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 18, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 19, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 20, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 21, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } }
             ]
         });
 
-        this.skyboxBindGroup = renderer.device.createBindGroup({
-            label: "skybox bind group",
-            layout: this.skyboxBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                { binding: 1, resource: env.envCubemapView },
-                { binding: 2, resource: env.envSampler }
-            ]
-        });
-
-        this.skyboxPipeline = renderer.device.createRenderPipeline({
-            label: "skybox pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [ this.skyboxBindGroupLayout ]
-            }),
-            depthStencil: {
-                depthWriteEnabled: false,
-                depthCompare: "less-equal",
-                format: "depth24plus"
-            },
-            vertex: {
-                module: renderer.device.createShaderModule({ code: shaders.skyboxVertSrc }),
-                entryPoint: "main"
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({ code: shaders.skyboxFragSrc }),
-                entryPoint: "main",
-                targets: [ { format: renderer.canvasFormat } ]
-            }
-        });
-
-        // Volumetric Lighting
-        this.volumetricBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "volumetric lighting bind group layout",
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
-                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
-                { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-            ]
-        });
-
-        this.volumetricPipeline = renderer.device.createRenderPipeline({
-            label: "volumetric lighting pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [this.volumetricBindGroupLayout]
-            }),
-            vertex: {
-                module: renderer.device.createShaderModule({ code: shaders.volumetricLightingVertSrc }),
-                entryPoint: "main"
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({ code: shaders.volumetricLightingFragSrc }),
-                entryPoint: "main",
-                targets: [ { 
-                    format: "rgba16float" // Rendering to half-res HDR buffer
-                } ]
-            }
-        });
-
-        // Volumetric Bilateral Composite
-        this.volumetricCompositeBindGroupLayout = renderer.device.createBindGroupLayout({
-            label: "volumetric composite bind group layout",
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
-                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-            ]
-        });
-
-        this.volumetricCompositePipeline = renderer.device.createRenderPipeline({
-            label: "volumetric composite pipeline",
-            layout: renderer.device.createPipelineLayout({
-                bindGroupLayouts: [this.volumetricCompositeBindGroupLayout]
-            }),
-            vertex: {
-                module: renderer.device.createShaderModule({ code: shaders.volumetricLightingVertSrc }),
-                entryPoint: "main"
-            },
-            fragment: {
-                module: renderer.device.createShaderModule({ code: shaders.volumetricCompositeFragSrc }),
-                entryPoint: "main",
-                targets: [ { 
-                    format: renderer.canvasFormat,
-                    blend: {
-                        color: { operation: 'add', srcFactor: 'one', dstFactor: 'one' },
-                        alpha: { operation: 'add', srcFactor: 'zero', dstFactor: 'one' }
-                    }
-                } ]
-            }
-        });
-
-        this.volumetricBindGroup = renderer.device.createBindGroup({
-            label: "volumetric lighting bind group",
-            layout: this.volumetricBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                { binding: 1, resource: this.depthTextureView },
-                { binding: 2, resource: { buffer: this.stage.sunLightBuffer } },
-                { binding: 3, resource: this.vsm.physicalAtlasView },
-                { binding: 4, resource: { buffer: this.vsm.pageTableBuffer } },
-                { binding: 5, resource: { buffer: this.vsm.vsmUniformBuffer } },
-            ]
-        });
-
-        this.volumetricCompositeBindGroup = renderer.device.createBindGroup({
-            label: "volumetric composite bind group",
-            layout: this.volumetricCompositeBindGroupLayout,
-            entries: [
-                { binding: 0, resource: this.volumetricTextureView },
-                { binding: 1, resource: this.depthTextureView },
-                { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
-            ]
-        });
-    }
-
-    private createShadingBindGroup() {
-        this.shadingBindGroup = renderer.device.createBindGroup({
-            label: "shading bind group",
-            layout: this.shadingBindGroupLayout,
+        this.shadingStaticBindGroup = renderer.device.createBindGroup({
+            label: "shading static bind group",
+            layout: this.shadingStaticBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
                 { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
@@ -666,266 +57,82 @@ export class ForwardPlusRenderer extends renderer.Renderer {
                 { binding: 6, resource: this.stageEnv.prefilteredMapView },
                 { binding: 7, resource: this.stageEnv.brdfLutView },
                 { binding: 8, resource: this.stageEnv.envSampler },
-                { binding: 9, resource: this.ddgi.getCurrentIrradianceView() },
-                { binding: 10, resource: this.ddgi.getCurrentVisibilityView() },
-                { binding: 11, resource: { buffer: this.ddgi.ddgiUniformBuffer } },
-                { binding: 12, resource: this.ddgi.ddgiSampler },
-                { binding: 13, resource: { buffer: this.stage.sunLightBuffer } },
-                // VSM bindings
-                { binding: 14, resource: this.vsm.physicalAtlasView },
-                { binding: 15, resource: this.vsm.shadowComparisonSampler },
-                { binding: 16, resource: { buffer: this.vsm.pageTableBuffer } },
-                { binding: 17, resource: { buffer: this.vsm.vsmUniformBuffer } },
-                // NRC bindings
-                { binding: 18, resource: this.nrc.getInferenceView() },
-                { binding: 19, resource: { buffer: this.nrc.nrcUniformBuffer } },
-                { binding: 20, resource: this.gBufferPositionTextureView },
-                { binding: 21, resource: this.gBufferNormalTextureView },
-                { binding: 22, resource: this.gBufferAlbedoTextureView },
-                { binding: 23, resource: this.surfelIrradianceDeviceTextureView },
-                { binding: 24, resource: { buffer: this.surfelParamsBuffer } },
-                { binding: 25, resource: this.ssaoBlurredTextureView },
+                { binding: 9, resource: { buffer: this.stage.sunLightBuffer } },
+                { binding: 10, resource: this.vsm.physicalAtlasView },
+                { binding: 11, resource: this.vsm.shadowComparisonSampler },
+                { binding: 12, resource: { buffer: this.vsm.pageTableBuffer } },
+                { binding: 13, resource: { buffer: this.vsm.vsmUniformBuffer } },
+                { binding: 14, resource: this.nrc.getInferenceView() },
+                { binding: 15, resource: { buffer: this.nrc.nrcUniformBuffer } },
+                { binding: 16, resource: this.gBufferPositionTextureView },
+                { binding: 17, resource: this.gBufferNormalTextureView },
+                { binding: 18, resource: this.gBufferAlbedoTextureView },
+                { binding: 19, resource: this.surfelIrradianceDeviceTextureView },
+                { binding: 20, resource: { buffer: this.surfelParamsBuffer } },
+                { binding: 21, resource: this.ssaoBlurredTextureView },
+            ]
+        });
+
+        this.giDynamicBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "GI dynamic bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+            ]
+        });
+
+        this.shadingPipeline = renderer.device.createRenderPipeline({
+            label: "fwd+ shading pipeline",
+            layout: renderer.device.createPipelineLayout({
+                bindGroupLayouts: [
+                    this.shadingStaticBindGroupLayout, 
+                    renderer.modelBindGroupLayout, 
+                    renderer.materialBindGroupLayout,
+                    this.giDynamicBindGroupLayout
+                ]
+            }),
+            depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.forwardPlusFragSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
+        });
+    }
+
+    protected override createShadingBindGroup() {
+        this.giDynamicBindGroup = renderer.device.createBindGroup({
+            label: "GI dynamic bind group",
+            layout: this.giDynamicBindGroupLayout,
+            entries: [
+                { binding: 0, resource: this.ddgi.getCurrentIrradianceView() },
+                { binding: 1, resource: this.ddgi.getCurrentVisibilityView() },
+                { binding: 2, resource: { buffer: this.ddgi.ddgiUniformBuffer } },
+                { binding: 3, resource: this.ddgi.ddgiSampler }
             ]
         });
     }
 
-    override draw() {
-        const encoder = renderer.device.createCommandEncoder();
-        const canvasTextureView = renderer.context.getCurrentTexture().createView();
-
-        // Update sun light
-        this.stage.updateSunLight();
-
-        // Z-Prepass — fill depth buffer first (needed by VSM page marking)
-        const zPrepass = encoder.beginRenderPass({
-            label: "z prepass",
-            colorAttachments: [],
-            depthStencilAttachment: {
-                view: this.depthTextureView,
-                depthClearValue: 1.0,
-                depthLoadOp: "clear",
-                depthStoreOp: "store"
-            }
-        });
-        zPrepass.setPipeline(this.zPrepassPipeline);
-        zPrepass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
-        this.scene.iterate(node => {
-            zPrepass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup);
-        }, material => {
-            zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-        }, primitive => {
-            zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
-            zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-            zPrepass.drawIndexed(primitive.numIndices);
-        });
-        zPrepass.end();
-
-        // VSM Shadow Map Pass (uses depth buffer for page marking)
-        this.stage.renderShadowMap(encoder, this.depthTextureView);
-
-        // G-buffer pass (for DDGI probe tracing)
-        const gBufferPass = encoder.beginRenderPass({
-            label: "G-buffer pass (DDGI)",
-            colorAttachments: [
-                { view: this.gBufferAlbedoTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferNormalTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferPositionTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferSpecularTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-            ],
-            depthStencilAttachment: {
-                view: this.depthTextureView,
-                depthReadOnly: true
-            }
-        });
-        gBufferPass.setPipeline(this.geometryPipeline);
-        gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
-        this.scene.iterate(node => {
-            gBufferPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup);
-        }, material => {
-            gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-        }, primitive => {
-            gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
-            gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-            gBufferPass.drawIndexed(primitive.numIndices);
-        });
-        gBufferPass.end();
-
-        renderer.device.queue.writeBuffer(this.surfelParamsBuffer, 0, new Float32Array([
-            this.stage.surfelGI.enabled ? 1.0 : 0.0,
-            2.0, // GI Intensity multiplier
-            this.stage.surfelGI.debugMode ? 1.0 : 0.0,
-            0.0
-        ]));
-
-        if (this.stage.surfelGI.enabled) {
-            this.stage.surfelGI.update(
-                encoder,
-                this.stage.scene,
-                this.stageEnv.envCubemapView,
-                this.stageEnv.envSampler,
-                this.depthTextureView,
-                this.gBufferNormalTextureView,
-                this.gBufferPositionTextureView,
-                this.surfelIrradianceDeviceTextureView,
-                this.stage.sunLightBuffer,
-                this.stage.vsm.physicalAtlasView,
-                this.stage.vsm.vsmUniformBuffer
-            );
-        }
-
-        // Run DDGI update passes
-        if (this.stage.ddgi.enabled) {
-            this.stage.ddgi.update(
-                encoder,
-                this.stage.scene.voxelGridView,
-                this.stage.sunLightBuffer,
-                this.vsm.physicalAtlasView,
-                this.vsm.vsmUniformBuffer
-            );
-        }
-        // NRC update (uses same G-buffer data)
-        this.nrc.update(encoder, {
-            depth: this.depthTextureView,
-            normal: this.gBufferNormalTextureView,
-            albedo: this.gBufferAlbedoTextureView,
-            position: this.gBufferPositionTextureView,
-        }, this.stage.sunLightBuffer, this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer);
-
-        // Recreate shading bind group each frame for DDGI ping-pong atlas views
-        this.ddgi.updateUniforms();
-        this.createShadingBindGroup();
-
-        // SSAO Passes
-        const ssaoPass = encoder.beginRenderPass({
-            label: "SSAO pass",
-            colorAttachments: [{
-                view: this.ssaoTextureView,
-                clearValue: [1, 1, 1, 1],
-                loadOp: "clear",
-                storeOp: "store"
-            }]
-        });
-        ssaoPass.setPipeline(this.ssaoPipeline);
-        ssaoPass.setBindGroup(0, this.ssaoBindGroup);
-        ssaoPass.draw(3);
-        ssaoPass.end();
-
-        const ssaoBlurPass = encoder.beginRenderPass({
-            label: "SSAO blur pass",
-            colorAttachments: [{
-                view: this.ssaoBlurredTextureView,
-                clearValue: [1, 1, 1, 1],
-                loadOp: "clear",
-                storeOp: "store"
-            }]
-        });
-        ssaoBlurPass.setPipeline(this.ssaoBlurPipeline);
-        ssaoBlurPass.setBindGroup(0, this.ssaoBlurBindGroup);
-        ssaoBlurPass.draw(3);
-        ssaoBlurPass.end();
-
-        // Reset light indices counter
-        encoder.copyBufferToBuffer(
-            this.zeroDeviceBuffer, 0,
-            this.globalLightIndicesDeviceBuffer, 0,
-            4
-        );
-
-        const cullingComputePass = encoder.beginComputePass();
-        cullingComputePass.setPipeline(this.cullingPipeline);
-        cullingComputePass.setBindGroup(shaders.constants.bindGroup_scene, this.cullingBindGroup);
-        cullingComputePass.dispatchWorkgroups(
-            shaders.constants.numClustersX, 
-            shaders.constants.numClustersY, 
-            shaders.constants.numClustersZ
-        );
-        cullingComputePass.end();
-
+    protected override executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {
         const shadingRenderPass = encoder.beginRenderPass({
             label: "Shading Pass",
-            colorAttachments: [
-                {
-                    view: canvasTextureView,
-                    clearValue: [0, 0, 0, 0],
-                    loadOp: "clear",
-                    storeOp: "store"
-                }
-            ],
-            depthStencilAttachment: {
-                view: this.depthTextureView,
-                depthReadOnly: true
-            }
+            colorAttachments: [ { view: canvasTextureView, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" } ],
+            depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
         });
         shadingRenderPass.setPipeline(this.shadingPipeline);
-        shadingRenderPass.setBindGroup(shaders.constants.bindGroup_scene, this.shadingBindGroup);
+        shadingRenderPass.setBindGroup(0, this.shadingStaticBindGroup);
+        // Bind group 1 is set per-node (model)
+        // Bind group 2 is set per-material
+        shadingRenderPass.setBindGroup(3, this.giDynamicBindGroup);
 
         this.scene.iterate(node => {
-            shadingRenderPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup);
+            shadingRenderPass.setBindGroup(1, node.modelBindGroup);
         }, material => {
-            shadingRenderPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
+            shadingRenderPass.setBindGroup(2, material.materialBindGroup);
         }, primitive => {
             shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
             shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
             shadingRenderPass.drawIndexed(primitive.numIndices);
         });
         shadingRenderPass.end();
-
-        // Skybox pass - draw behind all geometry
-        const skyboxPass = encoder.beginRenderPass({
-            label: "Skybox Pass",
-            colorAttachments: [
-                {
-                    view: canvasTextureView,
-                    loadOp: "load",
-                    storeOp: "store"
-                }
-            ],
-            depthStencilAttachment: {
-                view: this.depthTextureView,
-                depthLoadOp: "load",
-                depthStoreOp: "store"
-            }
-        });
-        skyboxPass.setPipeline(this.skyboxPipeline);
-        skyboxPass.setBindGroup(0, this.skyboxBindGroup);
-        skyboxPass.draw(3);
-        skyboxPass.end();
-
-        // Volumetric Lighting Generation Pass (Half-Res)
-        if (this.stage.sunVolumetricEnabled) {
-            const volumetricPass = encoder.beginRenderPass({
-                label: "Volumetric Lighting Generator Pass",
-                colorAttachments: [
-                    {
-                        view: this.volumetricTextureView,
-                        loadOp: "clear",
-                        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-                        storeOp: "store"
-                    }
-                ]
-            });
-            volumetricPass.setPipeline(this.volumetricPipeline);
-            volumetricPass.setBindGroup(0, this.volumetricBindGroup);
-            volumetricPass.draw(3);
-            volumetricPass.end();
-
-            // Volumetric Composite Pass (Full-Res Upsampling)
-            const volumetricCompositePass = encoder.beginRenderPass({
-                label: "Volumetric Composite Pass",
-                colorAttachments: [
-                    {
-                        view: canvasTextureView,
-                        loadOp: "load",
-                        storeOp: "store"
-                    }
-                ]
-            });
-            volumetricCompositePass.setPipeline(this.volumetricCompositePipeline);
-            volumetricCompositePass.setBindGroup(0, this.volumetricCompositeBindGroup);
-            volumetricCompositePass.draw(3);
-            volumetricCompositePass.end();
-        }
-
-        renderer.device.queue.submit([encoder.finish()]);
     }
 }
