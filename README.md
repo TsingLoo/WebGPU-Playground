@@ -1,5 +1,5 @@
-WebGPU based DDGI & VSM
-======================
+WebGPU Forward+ / Clustered Deferred Renderer
+==============================================
 
 ![](./img/chrome_Bm0daornYa.jpg)
 
@@ -25,41 +25,118 @@ WebGPU based DDGI & VSM
 
 https://github.com/user-attachments/assets/7da29776-83ef-4660-9702-f51ed1dad99b
 
-# Features 
+# Features
+
+## Rendering Pipelines
+
+### Forward+
+
+The Forward+ pipeline performs clustered light culling before the main shading pass. It consists of three stages: Z-prepass, light culling, and the shading pass. This approach retains the simplicity of a single forward pass while supporting efficient per-fragment lighting from many sources. Compared to classic deferred, it naturally handles transparency and flexible material models.
+
+### Clustered Deferred (Compute Pass)
+
+The deferred path writes albedo, position, and normal into G-buffers, then performs light culling and shading in a subsequent pass. In this implementation, the traditional fragment-based lighting stage is replaced by a compute shader that dispatches one thread per screen pixel, combining the vertex and fragment stages into a single programmable step. The full pipeline is: Z-prepass, G-buffer pass, light culling, compute shading pass, and final blit.
+
+---
 
 ## Z-Prepass
 
-A Z-Prepass is implemented in this project because the scene contains many overlapping objects. This initial rendering pass processes only the scene’s geometry to generate the depth buffer. A minimal vertex shader transforms the vertices, while a simple fragment shader discards transparent fragments based on the alpha channel. During the main shading pass, only fragments with depth values equal to those recorded in the Z-Prepass are processed.
+An early Z-prepass fills the depth buffer before any shading work begins. A simple vertex shader transforms geometry and a minimal fragment shader discards transparent fragments by alpha testing. The main shading pass then uses `depthCompare: equal`, so only the front-most fragments get shaded. This is particularly useful in scenes like Sponza where overlapping geometry would otherwise result in significant overdraw.
 
-## Clustered & Light Culling
+---
 
-To efficiently manage numerous light sources, a clustered light culling approach is used. The view frustum is spatially divided into a 3D grid of smaller volumes called clusters. A compute shader determines which lights intersect each cluster’s volume. During the actual lighting pass, each fragment determines the cluster it belongs to and retrieves the list of lights that contribute to that cluster. The subsequent lighting calculations are then performed based on this information.
+## Clustered Light Culling
 
-### A Single Global Buffer Instead of Per-Cluster Buffers
+The view frustum is divided into a 3D grid of clusters. A compute shader determines which lights overlap each cluster, and during shading each fragment retrieves the relevant light list by its cluster index.
 
-My implementation uses a single global buffer to store the indices of potentially visible lights. Each cluster stores only two values: an offset into this global buffer and a count indicating how many light indices belong to it. **This approach is more memory-efficient because it avoids allocating many separate per-tile or per-cluster lists in different memory regions**.
+### Single Global Buffer
 
-However, there is a hardware-imposed limitation: ` the maximum storage buffer binding size is 134217728`. In practice, this means **the global buffer approach cannot always store significantly more light indices than a per-tile buffer**. For example, if the cluster grid resolution is 32 × 32 × 32 and each cluster tracks up to 1024 lights, the total buffer size will exceed the binding limit. As a result, when a scene contains thousands of lights, this implementation may lose track of some light-cluster associations, producing visible tiled artifacts or lighting discontinuities as the image below.
+Instead of per-cluster light lists, a single global buffer stores all light indices. Each cluster records an offset and count into this buffer. This is more memory-efficient, but the approach is bounded by WebGPU's maximum storage buffer binding size (134,217,728 bytes). At high grid resolutions with thousands of lights, the buffer can overflow, causing visible tiled artifacts or missing lights.
 
 ![scene with 6k lights](./img/tiledLooking.png)
 
 ### Logarithmic Z-Slicing
 
-To improve the effectiveness of clustered light culling across varying depths, the view frustum’s Z-axis is sliced logarithmically rather than linearly in view space. When calculating a fragment’s cluster Z-index, its view-space Z coordinate is transformed using a logarithmic function. The implementation is based on [A Primer On Efficient Rendering Algorithms & Clustered Shading](https://www.aortiz.me/2018/12/21/CG.html).
+The Z-axis is sliced logarithmically rather than linearly in view space, which distributes clusters more evenly across the depth range and improves culling precision near the camera. Based on [A Primer On Efficient Rendering Algorithms & Clustered Shading](https://www.aortiz.me/2018/12/21/CG.html).
 
 ![log slice](https://www.aortiz.me/slides/ZSlices/zs2.png)
 
-## Forward + 
+---
 
-A Forward+ rendering pipeline **performs light culling before the main shading pass**. It consists of three main stages: the Z-prepass, light culling, and the shading pass. This approach retains the simplicity of a single main shading pass while enabling efficient per-fragment lighting. It is also more flexible than classic deferred rendering, as it naturally supports transparency and multiple material models within a single pass. 
+## PBR Shading (Cook-Torrance)
 
-## Deferred Rendering by Single Compute Pass
+All lighting uses a physically-based Cook-Torrance BRDF with GGX normal distribution, Smith geometry, and Fresnel-Schlick approximation. The material pipeline reads glTF PBR parameters (base color, metallic, roughness) from textures and uniforms, and supports tangent-space normal mapping with Gram-Schmidt re-orthogonalization. A Reinhard tone mapper and gamma correction are applied as the final step.
 
-In deferred rendering, the scene is first "rendered" using a simple vertex and fragment shader that output essential surface information—such as albedo, position, and normal into multiple render targets known as G-buffers. A subsequent pass then performs the light culling and actual lighting calculations using these G-buffer textures. By separating geometry rendering from lighting, deferred rendering decouples lights from scene complexity—lighting is computed only per pixel, rather than per object. This makes it highly efficient when dealing with many light sources. 
+---
 
-In my implementation, a compute shader replaces the traditional fragment shading stage. Instead of relying on the fixed-function rasterization pipeline, the compute shader dispatches one thread per screen pixel, combining the vertex and fragment stages into a single programmable step.
+## Image-Based Lighting (IBL)
 
-The full pipeline includes the following stages: the Z-prepass, G-buffer pass, light culling, compute shading pass and final blit pass to display the rendered image.
+Full split-sum IBL is computed entirely on the GPU at startup:
+
+- **Environment Cubemap** -- A procedural sky cubemap (256x256 per face) is generated by a compute shader at initialization. Users can also upload custom `.hdr` or `.exr` environment maps, which are converted from equirectangular to cubemap via another compute pass.
+- **Diffuse Irradiance** -- The environment cubemap is convolved into a 32x32 irradiance cubemap for diffuse ambient.
+- **Prefiltered Specular** -- A roughness-stratified prefiltered cubemap (128x128, 5 mip levels, 1024 importance samples per mip) is generated for specular IBL.
+- **BRDF LUT** -- A 256x256 LUT is precomputed for the split-sum integral's scale and bias terms.
+
+The skybox is rendered as a fullscreen pass with reverse depth (`less-equal`), so it appears behind all geometry.
+
+---
+
+## Dynamic Diffuse Global Illumination (DDGI)
+
+A probe-based DDGI system provides real-time diffuse global illumination. A configurable 3D probe grid is placed over the scene, and each frame the probes are updated through a multi-pass compute pipeline:
+
+1. **Probe Trace** -- Each probe fires rays into a voxelized scene representation to gather radiance samples. The trace accounts for sun light, VSM shadows, and environment lighting.
+2. **Irradiance Update** -- Ray results are blended into the irradiance atlas using exponential hysteresis, with octahedral encoding per probe.
+3. **Visibility Update** -- Mean distance and squared distance are similarly accumulated for Chebyshev-based visibility testing.
+4. **Ping-Pong Atlases** -- Double-buffered atlas textures prevent read-write hazards in the update passes.
+
+During shading, each fragment performs trilinear interpolation across the 8 surrounding probes, weighted by Chebyshev visibility to suppress light leaking.
+
+### Hybrid SSGI
+
+When enabled, the DDGI path also runs a lightweight screen-space GI pass. A few short rays per pixel are traced through the G-buffer using screen-space ray marching, and hits are shaded with the DDGI irradiance estimate. The final indirect diffuse is a blend of SSGI (for hit rays) and DDGI (for missed rays), which sharpens contact-scale color bleeding that probe grids alone tend to miss.
+
+---
+
+## Virtual Shadow Maps (VSM)
+
+Shadows from the directional (sun) light use a clipmap-based Virtual Shadow Map system. The pipeline runs entirely on the GPU:
+
+1. **Clear Pass** -- Resets page request flags and allocation state.
+2. **Mark Pass** -- A compute shader reprojects each screen pixel into light space to determine which virtual shadow pages are needed.
+3. **Allocate Pass** -- Requested pages are assigned physical slots from an atlas pool.
+4. **Render Pass** -- Scene geometry is rasterized into the physical atlas with per-level orthographic projections. Each clipmap level covers a progressively larger region (16 to 512 world units), centered on the camera with sub-texel snapping to eliminate shadow swimming.
+
+The shadow lookup in the fragment shader walks the page table to find the physical atlas tile for the current fragment's light-space position. The default configuration is a 4096x4096 physical atlas with 128-texel pages and 6 clipmap levels.
+
+---
+
+## Screen-Space Ambient Occlusion (SSAO)
+
+A screen-space AO pass samples the G-buffer depth and normals to estimate local occlusion. The raw AO result is blurred with a box filter to reduce noise, then multiplied into the ambient term of the final shading. Radius, bias, and power are adjustable at runtime.
+
+---
+
+## Volumetric Lighting
+
+Sun-aligned volumetric fog is rendered in a half-resolution pass. For each pixel, a ray is marched from the camera toward the fragment position, sampling the VSM shadow atlas at each step to determine in-light vs. in-shadow status. The accumulated scattering is composited back to full resolution with additive blending. Intensity, height falloff, height scale, maximum distance, and march step count are all adjustable via the GUI.
+
+---
+
+## Point Lights & Sun Light
+
+Up to 8000 dynamic point lights can be spawned and their count adjusted at runtime. The sun (directional) light supports adjustable direction, intensity, and can be toggled on/off independently.
+
+---
+
+## Runtime Tools
+
+- **Benchmark mode** -- Steps through a configurable range of point light counts, measuring average FPS over an 8-second window at each step.
+- **HDRI upload** -- Load `.hdr` or `.exr` environment maps at runtime; the IBL cubemaps are automatically recomputed.
+- **Model upload** -- Drag-and-drop `.gltf` or `.glb` files to replace the scene geometry.
+
+---
 
 # Performance Analysis
 
@@ -83,7 +160,7 @@ Contrary to the common assumption that **deferred rendering** is problematic for
 
 Both deferred rendering methods exhibit identical performance at lower light counts and when the light count exceeds 2,400, a consistent performance gap appears. The **Compute Deferred approach maintains a lower frame time compared to the Traditional Deferred** method, and this gap widens as the number of lights scales up. 
 
-The performance advantage comes from the compute shader’s ability to skip the GPU’s fixed-function rasterization stage and run directly on compute units. Instead of running per-pixel like fragment shaders, compute shaders work in small groups allowing threads to share and reuse lighting data efficiently using fast shared memory. This reduces unnecessary global memory access and lowers overall bandwidth usage.
+The performance advantage comes from the compute shader's ability to skip the GPU's fixed-function rasterization stage and run directly on compute units. Instead of running per-pixel like fragment shaders, compute shaders work in small groups allowing threads to share and reuse lighting data efficiently using fast shared memory. This reduces unnecessary global memory access and lowers overall bandwidth usage.
 
 # Debug Images 
 
