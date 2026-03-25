@@ -169,8 +169,8 @@ renderModeController.onChange(setRenderer);
 const ddgiFolder = gui.addFolder('DDGI');
 ddgiFolder.add(stage.ddgi, 'enabled').name('Enabled').listen().onChange((val: boolean) => {
     if (val) {
-        stage.surfelGI.enabled = false;
-        // stage.nrc.enabled = false; // commented out in GUI currently
+        // stage.surfelGI.enabled = false;
+        // stage.nrc.enabled = false;
     }
     stage.ddgi.updateUniforms();
 });
@@ -205,8 +205,8 @@ const gridProxy = {
 const updateGridBounds = () => {
     stage.ddgi.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
     stage.ddgi.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
-    stage.surfelGI.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
-    stage.surfelGI.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
+    // stage.surfelGI.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
+    // stage.surfelGI.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
     stage.ddgi.updateUniforms();
     stage.nrc.setSceneBounds(stage.ddgi.gridMin as [number, number, number], stage.ddgi.gridMax as [number, number, number]);
 };
@@ -225,19 +225,18 @@ const nrcFolder = gui.addFolder('NRC (Neural Radiance Cache)');
 // ...
 */
 
-// =========== Surfel GI ===========
-const surfelFolder = gui.addFolder('Surfel GI');
-surfelFolder.add(stage.surfelGI, 'enabled').name('Enabled').listen().onChange((val: boolean) => {
-    if (val) {
-        // Mutual exclusion: disable DDGI and NRC when Surfel is enabled
-        stage.ddgi.enabled = false;
-        stage.nrc.enabled = false;
-        stage.ddgi.updateUniforms();
-        stage.nrc.updateUniforms();
-    }
-});
-surfelFolder.add(stage.surfelGI, 'debugMode').name('Debug Mode').listen();
-surfelFolder.open();
+// =========== Surfel GI (disabled) ===========
+// const surfelFolder = gui.addFolder('Surfel GI');
+// surfelFolder.add(stage.surfelGI, 'enabled').name('Enabled').listen().onChange((val: boolean) => {
+//     if (val) {
+//         stage.ddgi.enabled = false;
+//         stage.nrc.enabled = false;
+//         stage.ddgi.updateUniforms();
+//         stage.nrc.updateUniforms();
+//     }
+// });
+// surfelFolder.add(stage.surfelGI, 'debugMode').name('Debug Mode').listen();
+// surfelFolder.open();
 
 // =========== SSAO ===========
 const ssaoFolder = gui.addFolder('SSAO');
