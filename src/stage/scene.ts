@@ -66,11 +66,13 @@ class Texture {
 export class Material {
     private static nextId = 0;
     readonly id: number;
+    readonly isOpaque: boolean;
 
     materialBindGroup: GPUBindGroup;
 
     constructor(gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
         this.id = Material.nextId++;
+        this.isOpaque = (gltfMaterial.alphaMode !== 'MASK' && gltfMaterial.alphaMode !== 'BLEND');
 
         // BaseColor texture uses sRGB (gamma-encoded color data)
         const texIndex = gltfMaterial.pbrMetallicRoughness?.baseColorTexture?.index;
@@ -677,7 +679,7 @@ export class Scene {
     }
 
     iterate(nodeFunction: (node: Node) => void, materialFunction: (material: Material) => void,
-        primFunction: (primitive: Primitive) => void) {
+        primFunction: (primitive: Primitive) => void, opaqueFilter: boolean | null = null) {
         let nodes = [this.root];
 
         let lastMaterialId: number | undefined = undefined;
@@ -688,6 +690,8 @@ export class Scene {
                 nodeFunction(node);
 
                 for (let primitive of node.mesh.primitives) {
+                    if (opaqueFilter !== null && primitive.material.isOpaque !== opaqueFilter) continue;
+
                     if (primitive.material.id != lastMaterialId) {
                         materialFunction(primitive.material);
                         lastMaterialId = primitive.material.id;

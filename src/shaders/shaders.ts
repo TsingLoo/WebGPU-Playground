@@ -158,9 +158,13 @@ function processMaterialShaderRaw(raw: string) {
 export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);
 export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
 
+const discardRegex = /if\s*\(surf\.alpha\s*<\s*0\.5f?\)\s*\{\s*discard;\s*\}/g;
+
 export const geometryFragSrc: string = processMaterialShaderRaw(geometryFragRaw);
+export const geometryOpaqueFragSrc: string = processMaterialShaderRaw(geometryFragRaw.replace(discardRegex, ''));
 
 export const forwardPlusFragSrc: string = processMaterialShaderRaw(forwardPlusFragRaw);
+export const forwardPlusOpaqueFragSrc: string = processMaterialShaderRaw(forwardPlusFragRaw.replace(discardRegex, ''));
 
 export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
 export const clusteredDeferredFullscreenVertSrc: string = processShaderRaw(clusteredDeferredFullscreenVertRaw);
