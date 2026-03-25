@@ -139,9 +139,13 @@ fn main(
         // Inline DDGI irradiance sampling (trilinear probe interpolation + Chebyshev visibility)
         let ddgi_totalIrr = evaluateDDGI(pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
 
-        let ddgiBounce = ddgi_totalIrr * albedo;
-        let iblFill = iblIrradiance * albedo * 0.3;
-        diffuseAmbient = ddgiBounce + iblFill;
+        let scr_w = f32(clusterSet.screen_width);
+        let scr_h = f32(clusterSet.screen_height);
+        let fragcoord_xy = vec2f(fragcoordi) + vec2f(0.5);
+        diffuseAmbient = evaluateHybridSSGI(
+            fragcoord_xy, pos_world, N, albedo, ddgi_totalIrr, iblIrradiance,
+            camera, scr_w, scr_h, positionTex, albedoTex, ddgiParams.ddgi_enabled.w
+        );
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode: sample the neural radiance cache inference texture
         // Map global_id back to screen UV
