@@ -66,7 +66,11 @@ class Texture {
 export class Material {
     private static nextId = 0;
     readonly id: number;
-    readonly isOpaque: boolean;
+    // The variant type of this material (e.g. 'standard', 'unlit', 'glass')
+    type: string = 'standard';
+    
+    // Identifies if this material should be rendered in the Opaque or Cutout pipeline.
+    isOpaque: boolean = true;
 
     materialBindGroup: GPUBindGroup;
 
@@ -499,7 +503,12 @@ export class Scene {
         let sceneMaterials: Material[] = [];
         if (gltf.materials) {
             for (let gltfMaterial of gltf.materials) {
-                sceneMaterials.push(new Material(gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear));
+                let currentMat = new Material(gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
+                // TEST: Assign the 'unlit' variant to the Lion
+                if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
+                    currentMat.type = "unlit";
+                }
+                sceneMaterials.push(currentMat);
             }
         }
 

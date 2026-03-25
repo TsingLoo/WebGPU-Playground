@@ -1,75 +1,76 @@
 // CHECKITOUT: this file loads all the shaders and preprocesses them with some common code
 
-import commonRaw from './common.wgsl?raw';
-import materialEvaluationRaw from './material_evaluation.wgsl?raw';
-import giEvaluationRaw from './gi_evaluation.wgsl?raw';
+import commonRaw from './core/common.wgsl?raw';
+import standardMaterialRaw from './materials/standard_material.wgsl?raw';
+import unlitMaterialRaw from './materials/unlit_material.wgsl?raw';
+import giEvaluationRaw from './core/gi_evaluation.wgsl?raw';
 
-import naiveVertRaw from './naive.vs.wgsl?raw';
-import naiveFragRaw from './naive.fs.wgsl?raw';
+import naiveVertRaw from './core/naive.vs.wgsl?raw';
+import naiveFragRaw from './core/naive.fs.wgsl?raw';
 
-import geometryFragRaw from './geometry.fs.wgsl?raw';
+import geometryFragRaw from './core/geometry.fs.wgsl?raw';
 
-import forwardPlusFragRaw from './forward_plus.fs.wgsl?raw';
+import forwardPlusFragRaw from './forward_plus/forward_plus.fs.wgsl?raw';
 
-import clusteredDeferredFragRaw from './clustered_deferred.fs.wgsl?raw';
-import clusteredDeferredFullscreenVertRaw from './clustered_deferred_fullscreen.vs.wgsl?raw';
-import clusteredDeferredFullscreenFragRaw from './clustered_deferred_fullscreen.fs.wgsl?raw';
+import clusteredDeferredFragRaw from './clustered_deferred/clustered_deferred.fs.wgsl?raw';
+import clusteredDeferredFullscreenVertRaw from './clustered_deferred/clustered_deferred_fullscreen.vs.wgsl?raw';
+import clusteredDeferredFullscreenFragRaw from './clustered_deferred/clustered_deferred_fullscreen.fs.wgsl?raw';
 
-import clusteredDeferredComputeSrcRaw from './clusteredDeferred.cs.wgsl?raw';
+import clusteredDeferredComputeSrcRaw from './clustered_deferred/clusteredDeferred.cs.wgsl?raw';
 
-import moveLightsComputeRaw from './move_lights.cs.wgsl?raw';
-import clusteringComputeRaw from './clustering.cs.wgsl?raw';
+import moveLightsComputeRaw from './forward_plus/move_lights.cs.wgsl?raw';
+import clusteringComputeRaw from './forward_plus/clustering.cs.wgsl?raw';
 
-import zPrepassFragRaw from './zPrepass.fs.wgsl?raw';
+import zPrepassFragRaw from './core/zPrepass.fs.wgsl?raw';
 
 // IBL shaders
-import generateCubemapRaw from './generate_cubemap.cs.wgsl?raw';
-import irradianceConvolutionRaw from './irradiance_convolution.cs.wgsl?raw';
-import prefilterEnvmapRaw from './prefilter_envmap.cs.wgsl?raw';
-import brdfLutRaw from './brdf_lut.cs.wgsl?raw';
-import equirectangularToCubemapRaw from './equirectangular_to_cubemap.cs.wgsl?raw';
+import generateCubemapRaw from './ibl/generate_cubemap.cs.wgsl?raw';
+import irradianceConvolutionRaw from './ibl/irradiance_convolution.cs.wgsl?raw';
+import prefilterEnvmapRaw from './ibl/prefilter_envmap.cs.wgsl?raw';
+import brdfLutRaw from './ibl/brdf_lut.cs.wgsl?raw';
+import equirectangularToCubemapRaw from './ibl/equirectangular_to_cubemap.cs.wgsl?raw';
 
 // DDGI shaders
-import ddgiProbeTraceRaw from './ddgi_probe_trace.cs.wgsl?raw';
-import ddgiIrradianceUpdateRaw from './ddgi_irradiance_update.cs.wgsl?raw';
-import ddgiVisibilityUpdateRaw from './ddgi_visibility_update.cs.wgsl?raw';
-import ddgiBorderUpdateRaw from './ddgi_border_update.cs.wgsl?raw';
+import ddgiProbeTraceRaw from './ddgi/ddgi_probe_trace.cs.wgsl?raw';
+import ddgiIrradianceUpdateRaw from './ddgi/ddgi_irradiance_update.cs.wgsl?raw';
+import ddgiVisibilityUpdateRaw from './ddgi/ddgi_visibility_update.cs.wgsl?raw';
+import ddgiBorderUpdateRaw from './ddgi/ddgi_border_update.cs.wgsl?raw';
 
 // NRC shaders
-import nrcCommonRaw from './nrc_common.wgsl?raw';
-import nrcScatterTrainingRaw from './nrc_scatter_training.cs.wgsl?raw';
-import nrcTrainRaw from './nrc_train.cs.wgsl?raw';
-import nrcInferenceRaw from './nrc_inference.cs.wgsl?raw';
+import nrcCommonRaw from './nrc/nrc_common.wgsl?raw';
+import nrcScatterTrainingRaw from './nrc/nrc_scatter_training.cs.wgsl?raw';
+import nrcTrainRaw from './nrc/nrc_train.cs.wgsl?raw';
+import nrcInferenceRaw from './nrc/nrc_inference.cs.wgsl?raw';
 
 // Surfel shaders
-import surfelCommonRaw from './surfel_common.wgsl?raw';
-import bvhRaw from './bvh.wgsl?raw';
-import surfelLifecycleRaw from './surfel_lifecycle.cs.wgsl?raw';
-import surfelGridRaw from './surfel_grid.cs.wgsl?raw';
-import surfelIntegratorRaw from './surfel_integrator.cs.wgsl?raw';
-import surfelResolveRaw from './surfel_resolve.cs.wgsl?raw';
+import surfelCommonRaw from './surfel/surfel_common.wgsl?raw';
+import bvhRaw from './surfel/bvh.wgsl?raw';
+import surfelLifecycleRaw from './surfel/surfel_lifecycle.cs.wgsl?raw';
+import surfelGridRaw from './surfel/surfel_grid.cs.wgsl?raw';
+import surfelIntegratorRaw from './surfel/surfel_integrator.cs.wgsl?raw';
+import surfelResolveRaw from './surfel/surfel_resolve.cs.wgsl?raw';
 
 // Shadow shaders
-import shadowVertRaw from './shadow.vs.wgsl?raw';
-import shadowFragRaw from './shadow.fs.wgsl?raw';
+import shadowVertRaw from './shadows/shadow.vs.wgsl?raw';
+import shadowFragRaw from './shadows/shadow.fs.wgsl?raw';
 
 // VSM shaders
-import vsmClearRaw from './vsm_clear.cs.wgsl?raw';
-import vsmMarkPagesRaw from './vsm_mark_pages.cs.wgsl?raw';
-import vsmAllocatePagesRaw from './vsm_allocate_pages.cs.wgsl?raw';
+import vsmClearRaw from './shadows/vsm_clear.cs.wgsl?raw';
+import vsmMarkPagesRaw from './shadows/vsm_mark_pages.cs.wgsl?raw';
+import vsmAllocatePagesRaw from './shadows/vsm_allocate_pages.cs.wgsl?raw';
 
 // Skybox shaders
-import skyboxVertRaw from './skybox.vs.wgsl?raw';
-import skyboxFragRaw from './skybox.fs.wgsl?raw';
+import skyboxVertRaw from './environment/skybox.vs.wgsl?raw';
+import skyboxFragRaw from './environment/skybox.fs.wgsl?raw';
 
 // SSAO shaders
-import ssaoFragRaw from './ssao.fs.wgsl?raw';
-import ssaoBlurFragRaw from './ssao_blur.fs.wgsl?raw';
+import ssaoFragRaw from './postprocessing/ssao.fs.wgsl?raw';
+import ssaoBlurFragRaw from './postprocessing/ssao_blur.fs.wgsl?raw';
 
 // Volumetric Lighting shaders
-import volumetricLightingVertRaw from './volumetric_lighting.vs.wgsl?raw';
-import volumetricLightingFragRaw from './volumetric_lighting.fs.wgsl?raw';
-import volumetricCompositeFragRaw from './volumetric_composite.fs.wgsl?raw';
+import volumetricLightingVertRaw from './environment/volumetric_lighting.vs.wgsl?raw';
+import volumetricLightingFragRaw from './environment/volumetric_lighting.fs.wgsl?raw';
+import volumetricCompositeFragRaw from './environment/volumetric_composite.fs.wgsl?raw';
 
 // CONSTANTS (for use in shaders)
 // =================================
@@ -145,14 +146,16 @@ function evalShaderRaw(raw: string) {
 
 const commonSrc: string = evalShaderRaw(commonRaw);
 const giEvaluationSrc: string = evalShaderRaw(giEvaluationRaw);
-const materialEvaluationSrc: string = evalShaderRaw(materialEvaluationRaw);
+const standardMaterialSrc: string = evalShaderRaw(standardMaterialRaw);
+const unlitMaterialSrc: string = evalShaderRaw(unlitMaterialRaw);
+
+const materials: Record<string, string> = {
+    'standard': standardMaterialSrc,
+    'unlit': unlitMaterialSrc
+};
 
 function processShaderRaw(raw: string) {
     return commonSrc + giEvaluationSrc + evalShaderRaw(raw);
-}
-
-function processMaterialShaderRaw(raw: string) {
-    return commonSrc + materialEvaluationSrc + giEvaluationSrc + evalShaderRaw(raw);
 }
 
 export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);
@@ -160,11 +163,19 @@ export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
 
 const discardRegex = /if\s*\(surf\.alpha\s*<\s*0\.5f?\)\s*\{\s*discard;\s*\}/g;
 
-export const geometryFragSrc: string = processMaterialShaderRaw(geometryFragRaw);
-export const geometryOpaqueFragSrc: string = processMaterialShaderRaw(geometryFragRaw.replace(discardRegex, ''));
+export function buildGeometryShader(materialType: string, isOpaque: boolean): string {
+    const matSrc = materials[materialType] || materials['standard'];
+    let raw = evalShaderRaw(geometryFragRaw);
+    if (isOpaque) raw = raw.replace(discardRegex, '');
+    return commonSrc + matSrc + raw; 
+}
 
-export const forwardPlusFragSrc: string = processMaterialShaderRaw(forwardPlusFragRaw);
-export const forwardPlusOpaqueFragSrc: string = processMaterialShaderRaw(forwardPlusFragRaw.replace(discardRegex, ''));
+export function buildForwardPlusShader(materialType: string, isOpaque: boolean): string {
+    const matSrc = materials[materialType] || materials['standard'];
+    let raw = evalShaderRaw(forwardPlusFragRaw);
+    if (isOpaque) raw = raw.replace(discardRegex, '');
+    return commonSrc + matSrc + giEvaluationSrc + raw; 
+}
 
 export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
 export const clusteredDeferredFullscreenVertSrc: string = processShaderRaw(clusteredDeferredFullscreenVertRaw);
@@ -175,7 +186,10 @@ export const clusteredDeferredComputeSrc: string = processShaderRaw(clusteredDef
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);
 
-export const zPrepassFragSrc: string = processMaterialShaderRaw(zPrepassFragRaw);
+export function buildZPrepassShader(materialType: string): string {
+    const matSrc = materials[materialType] || materials['standard'];
+    return commonSrc + matSrc + evalShaderRaw(zPrepassFragRaw);
+}
 
 // IBL shaders (standalone, not prepended with common)
 export const generateCubemapSrc = generateCubemapRaw;
