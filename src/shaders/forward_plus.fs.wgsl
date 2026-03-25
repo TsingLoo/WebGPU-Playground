@@ -98,7 +98,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         }
         // Handedness: default to 1.0 if tangent.w is zero (missing data)
         let handedness = select(in.tangent_world.w, 1.0, abs(in.tangent_world.w) < 0.5);
-        let B = normalize(cross(T, N)) * handedness;
+        let B = normalize(cross(N, T)) * handedness;
         let tbn = mat3x3f(T, B, N);
         // Sample normal map (stored as [0,1], convert to [-1,1])
         let normalSample = textureSample(normalTex, normalTexSampler, in.uv).rgb;
