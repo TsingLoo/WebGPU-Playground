@@ -140,7 +140,8 @@ fn main(
         let ddgi_spacing = ddgiParams.grid_spacing.xyz;
         let ddgi_gridMin = ddgiParams.grid_min.xyz;
         let ddgi_normalBias = ddgiParams.hysteresis.z;
-        let ddgi_biasedPos = pos_world + N * ddgi_normalBias;
+        let ddgi_viewBias = ddgiParams.hysteresis.w;
+        let ddgi_biasedPos = pos_world + N * ddgi_normalBias + V * ddgi_viewBias;
         let ddgi_fractIdx = (ddgi_biasedPos - ddgi_gridMin) / ddgi_spacing;
         let ddgi_baseIdx = vec3i(floor(ddgi_fractIdx));
         let ddgi_alpha = ddgi_fractIdx - floor(ddgi_fractIdx);
@@ -156,7 +157,7 @@ fn main(
                     let p_pos = ddgiProbePosition(p_gridIdx, ddgiParams);
                     let p_idx = ddgiProbeLinearIndex(p_gridIdx, ddgiParams);
 
-                    let p_dir = pos_world - p_pos;
+                    let p_dir = ddgi_biasedPos - p_pos;
                     let p_dist = length(p_dir);
                     let p_dirN = select(N, normalize(p_dir), p_dist > 0.001);
 
@@ -184,8 +185,10 @@ fn main(
                     p_w = max(p_w, 0.0001);
 
                     let p_irrUV = ddgiIrradianceTexelCoord(p_idx, octEncode(N), ddgiParams);
-                    let p_irr = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, p_irrUV, 0.0).rgb;
-                    ddgi_totalIrr += p_irr * p_w;
+                    let p_irr_encoded = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, p_irrUV, 0.0).rgb;
+                    let p_irr = pow(clamp(p_irr_encoded, vec3f(0.0), vec3f(1.0)), vec3f(5.0));
+                    let p_irr_clamped = min(p_irr, vec3f(10.0));
+                    ddgi_totalIrr += p_irr_clamped * p_w;
                     ddgi_totalW += p_w;
                 }
             }
@@ -221,8 +224,9 @@ fn main(
         diffuseAmbient = iblIrradiance * albedo * 0.7;
     }
 
-    // Combine: DDGI diffuse (unscaled) + specular IBL (scaled down)
-    let ambient = (kD * diffuseAmbient + specularIBL * 0.6) * ao;
+    // Combine: DDGI diffuse (unscaled) + specular IBL (scaled down when DDGI is active)
+    let specIBLScale = select(0.6, 0.0, ddgiParams.ddgi_enabled.x > 0.5);
+    let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
     let finalColor = ambient + Lo;
 
     // Tone mapping (Reinhard)
