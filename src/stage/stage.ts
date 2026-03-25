@@ -3,10 +3,8 @@ import { Camera } from "./camera";
 import { DDGI } from "./ddgi";
 import { Environment } from "./environment";
 import { Lights } from "./lights";
-import { NRC } from "./nrc";
 import { Scene } from "./scene";
 import { VSM } from "./vsm";
-import { SurfelGI } from './surfel_gi';
 import { SSAO } from "./ssao";
 
 export class Stage {
@@ -16,9 +14,7 @@ export class Stage {
     stats: Stats;
     environment: Environment;
     ddgi: DDGI;
-    nrc: NRC;
     vsm: VSM;
-    surfelGI: SurfelGI;
     ssao: SSAO;
 
     // Sun light
@@ -41,9 +37,7 @@ export class Stage {
         this.stats = stats;
         this.environment = environment;
         this.ddgi = new DDGI(this.camera, this.environment);
-        this.nrc = new NRC(this.camera, this.environment);
         this.vsm = new VSM(this.camera);
-        this.surfelGI = new SurfelGI(this.camera);
         this.ssao = new SSAO();
 
         // Sync sun direction into VSM

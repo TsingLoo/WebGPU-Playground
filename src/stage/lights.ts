@@ -122,12 +122,14 @@ export class Lights {
 
     // CHECKITOUT: this is where the light movement compute shader is dispatched from the host
     onFrame(time: number) {
+        if (this.numLights === 0) return;
+
         device.queue.writeBuffer(this.timeUniformBuffer, 0, new Float32Array([time]));
 
         // not using same encoder as render pass so this doesn't interfere with measuring actual rendering performance
-        const encoder = device.createCommandEncoder();
+        const encoder = device.createCommandEncoder({ label: "Move Lights Command Encoder" });
 
-        const computePass = encoder.beginComputePass();
+        const computePass = encoder.beginComputePass({ label: "Move Lights Compute Pass" });
         computePass.setPipeline(this.moveLightsComputePipeline);
 
         computePass.setBindGroup(0, this.moveLightsComputeBindGroup);

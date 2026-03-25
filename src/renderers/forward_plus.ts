@@ -62,13 +62,13 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 { binding: 11, resource: this.vsm.shadowComparisonSampler },
                 { binding: 12, resource: { buffer: this.vsm.pageTableBuffer } },
                 { binding: 13, resource: { buffer: this.vsm.vsmUniformBuffer } },
-                { binding: 14, resource: this.nrc.getInferenceView() },
-                { binding: 15, resource: { buffer: this.nrc.nrcUniformBuffer } },
+                { binding: 14, resource: this.dummyTextureView },
+                { binding: 15, resource: { buffer: this.dummyBuffer } },
                 { binding: 16, resource: this.gBufferPositionTextureView },
                 { binding: 17, resource: this.gBufferNormalTextureView },
                 { binding: 18, resource: this.gBufferAlbedoTextureView },
-                { binding: 19, resource: this.surfelIrradianceDeviceTextureView },
-                { binding: 20, resource: { buffer: this.surfelParamsBuffer } },
+                { binding: 19, resource: this.dummyTextureView },
+                { binding: 20, resource: { buffer: this.dummyBuffer } },
                 { binding: 21, resource: this.ssaoBlurredTextureView },
             ]
         });

@@ -27,22 +27,7 @@
 @group(${bindGroup_scene}) @binding(20) var<uniform> surfelParams: vec4f;
 @group(${bindGroup_scene}) @binding(21) var ssaoTex: texture_2d<f32>;
 
-@group(${bindGroup_material}) @binding(0) var diffuseTex: texture_2d<f32>;
-@group(${bindGroup_material}) @binding(1) var diffuseTexSampler: sampler;
 
-struct PBRParams {
-    roughness: f32,
-    metallic: f32,
-    has_mr_texture: f32,
-    has_normal_texture: f32,
-    base_color_factor: vec4f,
-    _reserved: vec4f,
-}
-@group(${bindGroup_material}) @binding(2) var<uniform> pbrParams: PBRParams;
-@group(${bindGroup_material}) @binding(3) var metallicRoughnessTex: texture_2d<f32>;
-@group(${bindGroup_material}) @binding(4) var metallicRoughnessTexSampler: sampler;
-@group(${bindGroup_material}) @binding(5) var normalTex: texture_2d<f32>;
-@group(${bindGroup_material}) @binding(6) var normalTexSampler: sampler;
 
 struct FragmentInput
 {
@@ -58,53 +43,20 @@ struct FragmentInput
 @fragment
 fn main(in: FragmentInput) -> @location(0) vec4f
 {
-    let diffuseColor = textureSample(diffuseTex, diffuseTexSampler, in.uv) * pbrParams.base_color_factor;
-    if (diffuseColor.a < 0.5f) {
+    let surf = evaluateMaterial(in.uv, in.nor_world, in.tangent_world);
+    if (surf.alpha < 0.5f) {
         discard;
     }
 
-    let albedo = diffuseColor.rgb;
-
-    // Per-pixel metallic/roughness/AO from texture (glTF ORM packing: R = occlusion, G = roughness, B = metallic)
-    var metallic = pbrParams.metallic;
-    var roughness = pbrParams.roughness;
-    var ao = 1.0;
-    if (pbrParams.has_mr_texture > 0.5) {
-        let mrSample = textureSample(metallicRoughnessTex, metallicRoughnessTexSampler, in.uv);
-        // glTF spec: metallicRoughness texture has G=roughness, B=metallic
-        // Occlusion is a separate texture (not bound here), so keep ao = 1.0
-        roughness = roughness * mrSample.g; // scalar * texture per glTF spec
-        metallic = metallic * mrSample.b;
-    }
-    roughness = max(roughness, 0.04); // clamp to avoid singularity
+    let albedo = surf.albedo;
+    var roughness = surf.roughness;
+    var metallic = surf.metallic;
     
     let ssao_val = textureLoad(ssaoTex, vec2i(in.fragcoord.xy), 0).r;
-    ao = ao * ssao_val;
+    var ao = ssao_val;
 
-    // Normal mapping: build TBN matrix and sample normal map
-    var N = normalize(in.nor_world);
-    let vertexNormal = N; // save for debug
-    if (pbrParams.has_normal_texture > 0.5) {
-        // Re-orthogonalize tangent against normal (Gram-Schmidt)
-        let T_raw = in.tangent_world.xyz - N * dot(in.tangent_world.xyz, N);
-        let T_len = length(T_raw);
-        var T = vec3f(0.0);
-        if (T_len > 0.001) {
-            T = T_raw / T_len;
-        } else {
-            // Degenerate tangent - pick one orthogonal to N
-            let refVec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(N.y) > 0.9);
-            T = normalize(cross(N, refVec));
-        }
-        // Handedness: default to 1.0 if tangent.w is zero (missing data)
-        let handedness = select(in.tangent_world.w, 1.0, abs(in.tangent_world.w) < 0.5);
-        let B = normalize(cross(N, T)) * handedness;
-        let tbn = mat3x3f(T, B, N);
-        // Sample normal map (stored as [0,1], convert to [-1,1])
-        let normalSample = textureSample(normalTex, normalTexSampler, in.uv).rgb;
-        let tangentNormal = normalSample * 2.0 - 1.0;
-        N = normalize(tbn * tangentNormal);
-    }
+    var N = surf.N;
+    let vertexNormal = normalize(in.nor_world); // save for debug
 
     let V = normalize(camera.camera_pos.xyz - in.pos_world);
 
