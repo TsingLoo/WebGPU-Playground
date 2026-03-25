@@ -2,7 +2,6 @@ import * as renderer from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
 import { DDGI } from '../stage/ddgi';
-import { NRC } from '../stage/nrc';
 import { VSM } from '../stage/vsm';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
@@ -23,9 +22,8 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     zeroDeviceBuffer: GPUBuffer;
     clusterSetDeviceBuffer: GPUBuffer;
 
-    surfelIrradianceDeviceTexture: GPUTexture;
-    surfelIrradianceDeviceTextureView: GPUTextureView;
-    surfelParamsBuffer: GPUBuffer;
+    dummyTextureView: GPUTextureView;
+    dummyBuffer: GPUBuffer;
 
     zPrepassPipeline: GPURenderPipeline;
 
@@ -66,7 +64,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     ssaoBlurPipeline: GPURenderPipeline;
 
     ddgi: DDGI;
-    nrc: NRC;
+    // Replaced NRC and Surfel with Dummy
     vsm: VSM;
     protected stageEnv: import('../stage/environment').Environment;
     protected stage: import('../stage/stage').Stage;
@@ -78,7 +76,15 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.stageEnv = stage.environment;
         this.stage = stage;
         this.ddgi = stage.ddgi;
-        this.nrc = stage.nrc;
+        // Dummy texture and buffer for unused NRC and Surfel bindings
+        const dummyTex = renderer.device.createTexture({
+            size: [1, 1], format: 'rgba16float',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING
+        });
+        this.dummyTextureView = dummyTex.createView();
+        this.dummyBuffer = renderer.device.createBuffer({
+            size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
         this.vsm = stage.vsm;
 
         this.depthTexture = renderer.device.createTexture({
@@ -140,18 +146,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
         this.ssaoBlurredTextureView = this.ssaoBlurredTexture.createView();
 
-        this.surfelIrradianceDeviceTexture = renderer.device.createTexture({
-            label: "Surfel Irradiance Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.surfelIrradianceDeviceTextureView = this.surfelIrradianceDeviceTexture.createView();
-        
-        this.surfelParamsBuffer = renderer.device.createBuffer({
-            label: "Surfel params buffer",
-            size: 16,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
+
 
         this.tileOffsetsDeviceBuffer = renderer.device.createBuffer({
             size: shaders.constants.numTotalClustersConfig * 2 * 4,
@@ -468,23 +463,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                            });
         gBufferPass.end();
 
-        // 5. GI Subsystem Updates
-        renderer.device.queue.writeBuffer(this.surfelParamsBuffer, 0, new Float32Array([
-            this.stage.surfelGI.enabled ? 1.0 : 0.0,
-            2.0, // GI Intensity multiplier
-            this.stage.surfelGI.debugMode ? 1.0 : 0.0,
-            0.0
-        ]));
-
-        if (this.stage.surfelGI.enabled) {
-            this.stage.surfelGI.update(
-                encoder, this.stage.scene, this.stageEnv.envCubemapView, this.stageEnv.envSampler,
-                this.depthTextureView, this.gBufferNormalTextureView, this.gBufferPositionTextureView,
-                this.surfelIrradianceDeviceTextureView, this.stage.sunLightBuffer,
-                this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
-            );
-        }
-
         if (this.stage.ddgi.enabled) {
             this.stage.ddgi.update(
                 encoder, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
@@ -492,13 +470,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             );
             this.ddgi.updateUniforms();
         }
-        
-        this.nrc.update(encoder, {
-            depth: this.depthTextureView,
-            normal: this.gBufferNormalTextureView,
-            albedo: this.gBufferAlbedoTextureView,
-            position: this.gBufferPositionTextureView,
-        }, this.stage.sunLightBuffer, this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer);
 
         // 6. Light Clustering Reset & Compute
         encoder.copyBufferToBuffer(this.zeroDeviceBuffer, 0, this.globalLightIndicesDeviceBuffer, 0, 4);

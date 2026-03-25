@@ -1,6 +1,7 @@
 // CHECKITOUT: this file loads all the shaders and preprocesses them with some common code
 
 import commonRaw from './common.wgsl?raw';
+import materialEvaluationRaw from './material_evaluation.wgsl?raw';
 import giEvaluationRaw from './gi_evaluation.wgsl?raw';
 
 import naiveVertRaw from './naive.vs.wgsl?raw';
@@ -144,17 +145,22 @@ function evalShaderRaw(raw: string) {
 
 const commonSrc: string = evalShaderRaw(commonRaw);
 const giEvaluationSrc: string = evalShaderRaw(giEvaluationRaw);
+const materialEvaluationSrc: string = evalShaderRaw(materialEvaluationRaw);
 
 function processShaderRaw(raw: string) {
     return commonSrc + giEvaluationSrc + evalShaderRaw(raw);
 }
 
+function processMaterialShaderRaw(raw: string) {
+    return commonSrc + materialEvaluationSrc + giEvaluationSrc + evalShaderRaw(raw);
+}
+
 export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);
 export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
 
-export const geometryFragSrc: string = processShaderRaw(geometryFragRaw);
+export const geometryFragSrc: string = processMaterialShaderRaw(geometryFragRaw);
 
-export const forwardPlusFragSrc: string = processShaderRaw(forwardPlusFragRaw);
+export const forwardPlusFragSrc: string = processMaterialShaderRaw(forwardPlusFragRaw);
 
 export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
 export const clusteredDeferredFullscreenVertSrc: string = processShaderRaw(clusteredDeferredFullscreenVertRaw);
@@ -165,7 +171,7 @@ export const clusteredDeferredComputeSrc: string = processShaderRaw(clusteredDef
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);
 
-export const zPrepassFragSrc: string = processShaderRaw(zPrepassFragRaw);
+export const zPrepassFragSrc: string = processMaterialShaderRaw(zPrepassFragRaw);
 
 // IBL shaders (standalone, not prepended with common)
 export const generateCubemapSrc = generateCubemapRaw;

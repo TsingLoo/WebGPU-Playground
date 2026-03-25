@@ -205,7 +205,6 @@ const updateGridBounds = () => {
     // stage.surfelGI.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
     // stage.surfelGI.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
     stage.ddgi.updateUniforms();
-    stage.nrc.setSceneBounds(stage.ddgi.gridMin as [number, number, number], stage.ddgi.gridMax as [number, number, number]);
 };
 gridBoundsFolder.add(gridProxy, 'minX', -30, 0).step(0.5).name('Min X').onChange(updateGridBounds);
 gridBoundsFolder.add(gridProxy, 'minY', -5, 5).step(0.5).name('Min Y').onChange(updateGridBounds);

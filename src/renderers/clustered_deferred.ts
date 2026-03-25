@@ -87,10 +87,10 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 16, resource: this.stage.vsm.physicalAtlasView },
                 { binding: 17, resource: { buffer: this.stage.vsm.pageTableBuffer } },
                 { binding: 18, resource: { buffer: this.stage.vsm.vsmUniformBuffer } },
-                { binding: 19, resource: this.stage.nrc.getInferenceView() },
-                { binding: 20, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
-                { binding: 21, resource: this.surfelIrradianceDeviceTextureView },
-                { binding: 22, resource: { buffer: this.surfelParamsBuffer } },
+                { binding: 19, resource: this.dummyTextureView },
+                { binding: 20, resource: { buffer: this.dummyBuffer } },
+                { binding: 21, resource: this.dummyTextureView },
+                { binding: 22, resource: { buffer: this.dummyBuffer } },
                 { binding: 23, resource: this.ssaoBlurredTextureView },
             ]
         });
