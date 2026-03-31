@@ -162,9 +162,14 @@ const lightingCompositeSrc: string = evalShaderRaw(lightingCompositeRaw);
 const standardMaterialSrc: string = evalShaderRaw(standardMaterialRaw);
 const unlitMaterialSrc: string = evalShaderRaw(unlitMaterialRaw);
 
-const materials: Record<string, string> = {
-    'standard': standardMaterialSrc,
-    'unlit': unlitMaterialSrc
+export interface MaterialShaderDesc {
+    vertexShaderRaw?: string;
+    materialEval: string;
+}
+
+const materials: Record<string, MaterialShaderDesc> = {
+    'standard': { materialEval: standardMaterialSrc },
+    'unlit': { materialEval: unlitMaterialSrc }
 };
 
 function processShaderRaw(raw: string) {
@@ -173,17 +178,27 @@ function processShaderRaw(raw: string) {
 
 export const standardVertSrc: string = processShaderRaw(standardVertRaw);
 
+export function buildVertexShader(materialType: string): string {
+    const desc = materials[materialType];
+    if (desc && desc.vertexShaderRaw) {
+        return processShaderRaw(desc.vertexShaderRaw);
+    }
+    return standardVertSrc;
+}
+
 const discardRegex = /if\s*\(surf\.alpha\s*<\s*0\.5f?\)\s*\{\s*discard;\s*\}/g;
 
 export function buildGeometryShader(materialType: string, isOpaque: boolean): string {
-    const matSrc = materials[materialType] || materials['standard'];
+    const matDesc = materials[materialType] || materials['standard'];
+    const matSrc = matDesc.materialEval;
     let raw = evalShaderRaw(geometryFragRaw);
     if (isOpaque) raw = raw.replace(discardRegex, '');
     return commonSrc + matSrc + raw; 
 }
 
 export function buildForwardPlusShader(materialType: string, isOpaque: boolean): string {
-    const matSrc = materials[materialType] || materials['standard'];
+    const matDesc = materials[materialType] || materials['standard'];
+    const matSrc = matDesc.materialEval;
     let raw = evalShaderRaw(forwardPlusFragRaw);
     if (isOpaque) raw = raw.replace(discardRegex, '');
     return commonSrc + matSrc + lightingCompositeSrc + giEvaluationSrc + raw; 
@@ -198,7 +213,8 @@ export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRa
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);
 
 export function buildZPrepassShader(materialType: string): string {
-    const matSrc = materials[materialType] || materials['standard'];
+    const matDesc = materials[materialType] || materials['standard'];
+    const matSrc = matDesc.materialEval;
     return commonSrc + matSrc + evalShaderRaw(zPrepassFragRaw);
 }
 

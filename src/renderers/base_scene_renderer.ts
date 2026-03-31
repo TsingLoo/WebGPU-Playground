@@ -362,7 +362,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
             depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'equal' },
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.standardVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.buildVertexShader(materialType) }), buffers: [renderer.vertexBufferLayout] },
             fragment: {
                 module: renderer.device.createShaderModule({ code: shaderSrc }),
                 entryPoint: 'main',
@@ -398,7 +398,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
             depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" },
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.standardVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.buildVertexShader(materialType) }), buffers: [renderer.vertexBufferLayout] },
             fragment: fragConfig,
             primitive: { topology: 'triangle-list', cullMode: 'none' }
         });
