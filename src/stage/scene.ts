@@ -64,7 +64,6 @@ class Texture {
 }
 
 export class Material {
-    private static nextId = 0;
     readonly id: number;
     // The variant type of this material (e.g. 'standard', 'unlit', 'glass')
     type: string = 'standard';
@@ -74,8 +73,8 @@ export class Material {
 
     materialBindGroup: GPUBindGroup;
 
-    constructor(gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
-        this.id = Material.nextId++;
+    constructor(materialId: number, gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
+        this.id = materialId;
         this.isOpaque = (gltfMaterial.alphaMode !== 'MASK' && gltfMaterial.alphaMode !== 'BLEND');
 
         // BaseColor texture uses sRGB (gamma-encoded color data)
@@ -422,8 +421,9 @@ export class Scene {
     public readonly voxelBoundsMin = [-15, 0, -10];
     public readonly voxelBoundsMax = [15, 15, 10];
     
-    // BVH for Surfel GI Ray Tracing
+    // BVH for Surfel GI & DDGI Ray Tracing
     public bvhData!: BVHData;
+    public globalMaterialBuffer!: GPUBuffer;
 
     constructor() {
         this.root.setName("root");
@@ -501,16 +501,43 @@ export class Scene {
         }
 
         let sceneMaterials: Material[] = [];
+        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 8); // 8 floats per material (32 bytes)
+        let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
+        let defaultRoughness = 1.0;
+        let defaultMetallic = 0.0;
+
         if (gltf.materials) {
-            for (let gltfMaterial of gltf.materials) {
-                let currentMat = new Material(gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
+            for (let i = 0; i < gltf.materials.length; i++) {
+                let gltfMaterial = gltf.materials[i];
+                let currentMat = new Material(i, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
                 // TEST: Assign the 'unlit' variant to the Lion
                 if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
                     currentMat.type = "unlit";
                 }
                 sceneMaterials.push(currentMat);
+                
+                // Pack for global materials buffer
+                let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
+                let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
+                let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
+
+                materialDataArray[i * 8 + 0] = baseColorFactor[0] ?? 1.0;
+                materialDataArray[i * 8 + 1] = baseColorFactor[1] ?? 1.0;
+                materialDataArray[i * 8 + 2] = baseColorFactor[2] ?? 1.0;
+                materialDataArray[i * 8 + 3] = baseColorFactor[3] ?? 1.0;
+                materialDataArray[i * 8 + 4] = roughness;
+                materialDataArray[i * 8 + 5] = metallic;
+                materialDataArray[i * 8 + 6] = 0.0; // pad
+                materialDataArray[i * 8 + 7] = 0.0; // pad
             }
         }
+
+        this.globalMaterialBuffer = device.createBuffer({
+            label: "Global Material Buffer",
+            size: materialDataArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(this.globalMaterialBuffer, 0, materialDataArray as any);
 
         let sceneMeshes: Mesh[] = [];
         for (let gltfMesh of gltf.meshes!) {

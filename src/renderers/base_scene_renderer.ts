@@ -299,8 +299,12 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         // 5. GI Updates
         if (this.stage.ddgi.enabled) {
             this.stage.ddgi.update(
-                encoder, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
-                this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
+                encoder, 
+                this.stage.scene.bvhData, 
+                this.stage.scene.globalMaterialBuffer,
+                this.stage.sunLightBuffer,
+                this.vsm.physicalAtlasView, 
+                this.vsm.vsmUniformBuffer
             );
         }
         if (this.stage.radianceCascades.enabled) {

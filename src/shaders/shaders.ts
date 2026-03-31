@@ -240,8 +240,10 @@ export const volumetricLightingVertSrc: string = processShaderRaw(volumetricLigh
 export const volumetricLightingFragSrc: string = processShaderRaw(volumetricLightingFragRaw);
 export const volumetricCompositeFragSrc: string = processShaderRaw(volumetricCompositeFragRaw);
 
-// DDGI shaders (need common)
-export const ddgiProbeTraceSrc: string = processShaderRaw(ddgiProbeTraceRaw);
+const bvhSrc: string = evalShaderRaw(bvhRaw);
+
+// DDGI shaders (need common + bvh)
+export const ddgiProbeTraceSrc: string = processShaderRaw(bvhSrc + ddgiProbeTraceRaw);
 export const ddgiIrradianceUpdateSrc: string = processShaderRaw(ddgiIrradianceUpdateRaw);
 export const ddgiVisibilityUpdateSrc: string = processShaderRaw(ddgiVisibilityUpdateRaw);
 export const ddgiBorderUpdateSrc: string = ddgiBorderUpdateRaw;
@@ -270,7 +272,6 @@ export const nrcInferenceSrc: string = processNrcShaderRaw(nrcInferenceRaw);
 
 // Surfel shaders (need common + surfel_common + bvh for structs/utilities)
 const surfelCommonSrc: string = evalShaderRaw(surfelCommonRaw);
-const bvhSrc: string = evalShaderRaw(bvhRaw);
 function processSurfelShaderRaw(raw: string) {
     return commonSrc + surfelCommonSrc + bvhSrc + evalShaderRaw(raw);
 }

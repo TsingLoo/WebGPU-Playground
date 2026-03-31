@@ -221,9 +221,7 @@ ddgiFolder.add(stage.ddgi, 'visibilityHysteresis', 0.8, 0.999).step(0.001).name(
 ddgiFolder.add(stage.ddgi, 'probeTraceAmbient', 0.0, 1.0).step(0.01).name('Ambient Base').onChange(() => {
     stage.ddgi.updateUniforms();
 });
-ddgiFolder.add(stage.ddgi, 'ssgiEnabled').name('SSGI').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
+
 ddgiFolder.open();
 
 // =========== NRC (Neural Radiance Caching) ===========
