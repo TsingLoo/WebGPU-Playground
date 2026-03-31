@@ -540,3 +540,10 @@ vsmFolder.open();
 
 setRenderer(renderModeController.getValue());
 
+const loadingOverlay = document.getElementById('loading-overlay');
+if (loadingOverlay) {
+    loadingOverlay.classList.add('hidden');
+    setTimeout(() => {
+        loadingOverlay.remove();
+    }, 500);
+}
