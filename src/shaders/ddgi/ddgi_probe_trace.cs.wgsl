@@ -101,7 +101,7 @@ fn main(
                     }
                     
                     hitLighting += vec3f(ddgi.ddgi_enabled.z); // minimal ambient
-                    hitRadiance = vec3f(0.5) * hitLighting; // diffuse 50% albedo proxy
+                    hitRadiance = vec3f(0.1) * hitLighting; // diffuse 50% albedo proxy
                     break;
                 }
             }

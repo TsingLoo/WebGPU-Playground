@@ -65,36 +65,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
     let V = normalize(camera.camera_pos.xyz - in.pos_world);
 
     // ---- Cluster lookup ----
-    let screen_width = f32(clusterSet.screen_width);
-    let screen_height = f32(clusterSet.screen_height);
-
-    let num_clusters_X = clusterSet.num_clusters_X;
-    let num_clusters_Y = clusterSet.num_clusters_Y;
-    let num_clusters_Z = clusterSet.num_clusters_Z;
-
-    let screen_size_cluster_x = screen_width / f32(num_clusters_X);
-    let screen_size_cluster_y = screen_height / f32(num_clusters_Y);
-
-    let clusterid_x = u32(in.fragcoord.x / screen_size_cluster_x);
-    let clusterid_y_unflipped = u32(in.fragcoord.y / screen_size_cluster_y);
-    let clusterid_y = clamp((num_clusters_Y - 1u) - clusterid_y_unflipped, 0u, num_clusters_Y - 1u);
-
-    let pos_view = (camera.view_mat * vec4f(in.pos_world, 1.0)).xyz;
-    let z_view = pos_view.z;
-
-    let near = camera.near_plane; 
-    let far = camera.far_plane;
-    let clamped_Z_positive = clamp(-z_view, near, far);
-
-    let logFN = log(far/near);
-    let SCALE = f32(num_clusters_Z) / logFN;
-    let BIAS = SCALE * log(near);
-    let slice = log(clamped_Z_positive) * SCALE - BIAS;
-    let cluster_z = clamp(u32(floor(slice)), 0u, num_clusters_Z - 1u);
-
-    let cluster_index = cluster_z * (num_clusters_X * num_clusters_Y) +
-                          clusterid_y * num_clusters_X +
-                          clusterid_x;
+    let cluster_index = getClusterIndex(in.fragcoord.xy, in.pos_world, camera, clusterSet);
 
     let lightmeta = tileOffsets[cluster_index];
     let offset = lightmeta.offset;
@@ -137,6 +108,19 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         diffuseAmbient = ddgi_totalIrr * albedo;
     } else if (rcParams.params.w > 0.5) {
         let rc_totalIrr = evaluateRCProbes(in.pos_world, N, V, rcParams, rcIrradianceAtlas, rcSampler);
+
+        let rcDebugMode = i32(rcParams.debug.x);
+        if (rcDebugMode == 1) {
+            return vec4f(rc_totalIrr * rcParams.params.y, 1.0);
+        } else if (rcDebugMode == 2) {
+            let uv = in.fragcoord.xy / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
+            if (uv.x > 0.6 && uv.y < 0.4) {
+                let atlasUV = vec2f((uv.x - 0.6) / 0.4, uv.y / 0.4);
+                let atlasColor = textureSampleLevel(rcIrradianceAtlas, rcSampler, atlasUV, 0.0).rgb;
+                return vec4f(atlasColor * 2.0, 1.0);
+            }
+        }
+
         diffuseAmbient = rc_totalIrr * albedo;
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode: sample the neural radiance cache inference texture

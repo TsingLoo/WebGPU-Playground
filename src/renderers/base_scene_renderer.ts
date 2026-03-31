@@ -62,6 +62,11 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     ssaoBlurBindGroup: GPUBindGroup;
     ssaoBlurPipeline: GPURenderPipeline;
 
+    debugBoxPipeline!: GPURenderPipeline;
+    debugBoxBindGroupLayout!: GPUBindGroupLayout;
+    debugBoxBindGroup!: GPUBindGroup;
+    debugBoxBuffer!: GPUBuffer;
+
     radianceCascades: RadianceCascades;
     // Replaced NRC and Surfel with Dummy
     vsm: VSM;
@@ -249,7 +254,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
         this.ssaoPipeline = renderer.device.createRenderPipeline({
             layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBindGroupLayout] }),
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
             fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
         });
 
@@ -263,15 +268,40 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
         this.ssaoBlurPipeline = renderer.device.createRenderPipeline({
             layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.ssaoBlurBindGroupLayout] }),
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.clusteredDeferredFullscreenVertSrc }), entryPoint: "main" },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
             fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoBlurFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
         });
 
         // -------------------------------------------------------------
-        // Skybox and Volumetrics
+        // Skybox, Volumetrics, and Debug
         // -------------------------------------------------------------
         this.createSkyboxPipeline();
         this.createVolumetricPipelines();
+        this.createDebugPipeline();
+    }
+
+    private createDebugPipeline() {
+        this.debugBoxBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "debug box bgl",
+            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }]
+        });
+        this.debugBoxPipeline = renderer.device.createRenderPipeline({
+            label: "debug box pipeline",
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [this.geometryBindGroupLayout, this.debugBoxBindGroupLayout] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "vs_main" },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "fs_main", targets: [{ format: renderer.canvasFormat }] },
+            primitive: { topology: "line-list" },
+            depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" }
+        });
+        
+        // box buffer is minPos vec4 + maxPos vec4 + color vec4 -> 48 bytes
+        this.debugBoxBuffer = renderer.device.createBuffer({
+            size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        this.debugBoxBindGroup = renderer.device.createBindGroup({
+            layout: this.debugBoxBindGroupLayout,
+            entries: [{ binding: 0, resource: { buffer: this.debugBoxBuffer } }]
+        });
     }
 
     private createSkyboxPipeline() {
@@ -572,6 +602,28 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             compositePass.end();
         }
 
+        // 12. Draw Debug Bounds
+        if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
+            const isDDGI = this.stage.ddgi.enabled;
+            const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
+            const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
+            const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0]; // Green for DDGI, Orange for RC
+
+            const boxData = new Float32Array([...minPos, 0, ...maxPos, 0, ...color]);
+            renderer.device.queue.writeBuffer(this.debugBoxBuffer, 0, boxData);
+
+            const debugPass = encoder.beginRenderPass({
+                label: "Debug Box Pass",
+                colorAttachments: [ { view: canvasTextureView, loadOp: "load", storeOp: "store" } ],
+                depthStencilAttachment: { view: this.depthTextureView, depthLoadOp: "load", depthStoreOp: "store" }
+            });
+            debugPass.setPipeline(this.debugBoxPipeline);
+            debugPass.setBindGroup(0, this.geometryBindGroup);
+            debugPass.setBindGroup(1, this.debugBoxBindGroup);
+            debugPass.draw(24);
+            debugPass.end();
+        }
+
         renderer.device.queue.submit([encoder.finish()]);
     }
 
@@ -594,7 +646,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
             depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'equal' },
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [renderer.vertexBufferLayout] },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.standardVertSrc }), buffers: [renderer.vertexBufferLayout] },
             fragment: {
                 module: renderer.device.createShaderModule({ code: shaderSrc }),
                 entryPoint: 'main',
@@ -630,7 +682,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
             depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" },
-            vertex: { module: renderer.device.createShaderModule({ code: shaders.naiveVertSrc }), buffers: [ renderer.vertexBufferLayout ] },
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.standardVertSrc }), buffers: [ renderer.vertexBufferLayout ] },
             fragment: fragConfig,
             primitive: { topology: 'triangle-list', cullMode: 'none' }
         });

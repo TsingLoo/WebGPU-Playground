@@ -52,7 +52,7 @@ fn evaluateDDGI(
                 let p_pos = ddgiProbePosition(gridIdx, ddgi);
                 let p_idx = ddgiProbeLinearIndex(gridIdx, ddgi);
 
-                let p_dir = biasedPos - p_pos;
+                let p_dir = p_pos - biasedPos;
                 let p_dist = length(p_dir);
                 let p_dirN = select(geometricN, normalize(p_dir), p_dist > 0.001);
 
@@ -133,43 +133,40 @@ fn evaluateRCProbes(
                 
                 let p_idx = gridIdx.z * rc.grid_count.x * rc.grid_count.y + gridIdx.y * rc.grid_count.x + gridIdx.x;
 
-                let p_dir = biasedPos - p_pos;
+                let p_dir = p_pos - biasedPos;
                 let p_dist = length(p_dir);
                 let p_dirN = select(geometricN, normalize(p_dir), p_dist > 0.001);
-
-                let p_wrap = (dot(p_dirN, geometricN) + 1.0) * 0.5;
-                if (p_wrap <= 0.0) { continue; }
 
                 let p_tri = vec3f(
                     select(1.0 - alpha.x, alpha.x, dx == 1),
                     select(1.0 - alpha.y, alpha.y, dy == 1),
                     select(1.0 - alpha.z, alpha.z, dz == 1)
                 );
-                var p_w = p_tri.x * p_tri.y * p_tri.z;
                 
-                p_w *= p_wrap;
-                if (p_w < 0.00001) { continue; }
+                // Aggressively cull embedded probes using power wrapper (prevents global 50% dimming)
+                let spherical_wrap = (dot(p_dirN, geometricN) + 1.0) * 0.5;
+                let p_wrap = pow(spherical_wrap, 4.0);
+                if (p_wrap <= 0.0001) { continue; }
+                
+                let p_w = p_tri.x * p_tri.y * p_tri.z * p_wrap;
 
                 // Same texel coord math as DDGI but without the helper functions which we'll inline
                 let texelsPerProbe = i32(rc.atlas_dims.y); // TEXELS_WITH_BORDER (10)
-                let probesPerRow = rc.grid_count.x;
+                let probesPerRow = 800;
                 let probeRow = p_idx / probesPerRow;
                 let probeCol = p_idx % probesPerRow;
                 
                 let probeOriginX = probeCol * texelsPerProbe;
                 let probeOriginY = probeRow * texelsPerProbe;
                 
-                let absDir = abs(geometricN);
-                let invL1 = 1.0 / (absDir.x + absDir.y + absDir.z);
-                var octUV = geometricN.xy * invL1;
-                if (geometricN.z <= 0.0) {
-                    let signP = sign(octUV);
-                    octUV = (vec2f(1.0) - abs(octUV.yx)) * signP;
-                }
+                let octUV = octEncode(geometricN);
                 
-                // Map [-1, 1] to UV [0, 1] mapped into the 8x8 interior of the 10x10 block
+                // Inset UVs by half texel to avoid sampling from uninitialized border
                 let interiorSize = f32(rc.atlas_dims.x); // TEXELS (8)
-                let mappedUV = (octUV * 0.5 + 0.5) * interiorSize;
+                let inset = 0.5 / interiorSize;
+                let safeUV = clamp(octUV, vec2f(inset), vec2f(1.0 - inset));
+                
+                let mappedUV = safeUV * interiorSize;
                 let finalUV = vec2f(
                     (f32(probeOriginX) + 1.0 + mappedUV.x) / f32(rc.atlas_dims.z),
                     (f32(probeOriginY) + 1.0 + mappedUV.y) / f32(rc.atlas_dims.w)

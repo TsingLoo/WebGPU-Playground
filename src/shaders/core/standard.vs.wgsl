@@ -1,7 +1,4 @@
-// CHECKITOUT: you can use this vertex shader for all of the renderers
-
-// TODO-1.3: add a uniform variable here for camera uniforms (of type CameraUniforms)
-// make sure to use ${bindGroup_scene} for the group
+// Standard vertex shader — shared by Forward+ and Clustered Deferred pipelines
 @group(${bindGroup_scene}) @binding(0) var<uniform> camera: CameraUniforms;
 
 @group(${bindGroup_model}) @binding(0) var<uniform> modelMat: mat4x4f;

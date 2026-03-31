@@ -23,8 +23,60 @@ fn fibonacciSphereDir(index: u32, total: u32) -> vec3f {
     return vec3f(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
 }
 
+// Global configurations
+const VX = 128;
+const VY = 128;
+const VZ = 128;
+
+// PCG hash based random utility
+fn pcg_hash(seed: u32) -> u32 {
+    var state = seed * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn rand_float(seed: u32) -> f32 {
+    return f32(pcg_hash(seed)) / 4294967296.0;
+}
+
+fn rotationMatrix(axis: vec3f, angle: f32) -> mat3x3f {
+    let s = sin(angle);
+    let c = cos(angle);
+    let oc = 1.0 - c;
+    return mat3x3f(
+        oc * axis.x * axis.x + c,           oc * axis.x * axis.y - axis.z * s,  oc * axis.z * axis.x + axis.y * s,
+        oc * axis.x * axis.y + axis.z * s,  oc * axis.y * axis.y + c,           oc * axis.y * axis.z - axis.x * s,
+        oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c
+    );
+}
+
 // Workgroup shared memory for the current probe's 84 evaluated rays.
-var<workgroup> shared_radiance: array<vec3f, 84>;
+// .rgb = radiance, .a = hit flag (1.0 = hit or sky, -1.0 = miss)
+var<workgroup> shared_radiance: array<vec4f, 84>;
+var<workgroup> probe_rotation: mat3x3f;
+
+// Evaluates lighting for a hit point, incorporating backface rejection.
+fn evaluateLighting(pos: vec3f, voxelData: vec4f, rayDir: vec3f) -> vec3f {
+    let normal = normalize(voxelData.rgb * 2.0 - 1.0);
+
+    // Strictly reject backface hits. If rayDir and normal point in the same hemisphere,
+    // the ray struck the INSIDE of the 3D geometry structure. Embedded probes must be pitch black.
+    if (dot(rayDir, normal) > 0.0) {
+        return vec3f(0.0);
+    }
+    
+    var hitLighting = vec3f(0.0);
+    
+    if (sunLight.color.a > 0.5) {
+        let sunShadow = calculateShadowVSMSimple(vsmPhysAtlas, vsmUniforms, sunLight, pos, normal);
+        let sunL = normalize(sunLight.direction.xyz);
+        let sunNdotL = max(dot(normal, sunL), 0.0);
+        hitLighting += sunLight.color.rgb * sunLight.direction.w * sunNdotL * sunShadow;
+    }
+    
+    hitLighting += vec3f(rcParams.params.z); // rc_ambient
+    return hitLighting;
+}
 
 // Raymarching interval function
 fn raymarchInterval(probeWorldPos: vec3f, rayDir: vec3f, startDist: f32, endDist: f32) -> vec4f {
@@ -63,17 +115,7 @@ fn raymarchInterval(probeWorldPos: vec3f, rayDir: vec3f, startDist: f32, endDist
             if (coord.x >= 0 && coord.y >= 0 && coord.z >= 0 && coord.x < 128 && coord.y < 128 && coord.z < 128) {
                 let voxel = textureLoad(voxelGrid, coord, 0);
                 if (voxel.a > 0.5) {
-                    let normal = normalize(voxel.rgb * 2.0 - 1.0);
-                    var hitLighting = vec3f(0.0);
-                    
-                    if (sunLight.color.a > 0.5) {
-                        let sunShadow = calculateShadowVSMSimple(vsmPhysAtlas, vsmUniforms, sunLight, pos, normal);
-                        let sunL = normalize(sunLight.direction.xyz);
-                        let sunNdotL = max(dot(normal, sunL), 0.0);
-                        hitLighting += sunLight.color.rgb * sunLight.direction.w * sunNdotL * sunShadow;
-                    }
-                    
-                    hitLighting += vec3f(rcParams.params.z); // rc_ambient
+                    let hitLighting = evaluateLighting(pos, voxel, rayDir);
                     return vec4f(vec3f(0.5) * hitLighting, t); // rgb=radiance, a=hitDist
                 }
             }
@@ -112,11 +154,12 @@ fn main(
     @builtin(local_invocation_id) lid: vec3u,
     @builtin(workgroup_id) wgid: vec3u
 ) {
-    let probeIndex = wgid.x;
+    let gridX = u32(rcParams.grid_count.x);
+    let probeIndex = wgid.y * gridX + wgid.x;
+    
     let totalProbes = u32(rcParams.grid_count.w);
     if (probeIndex >= totalProbes) { return; }
 
-    let gridX = u32(rcParams.grid_count.x);
     let gridY = u32(rcParams.grid_count.y);
     let pz = probeIndex / (gridX * gridY);
     let py = (probeIndex % (gridX * gridY)) / gridX;
@@ -132,6 +175,23 @@ fn main(
     );
 
     let threadIdx = lid.x; // 0..63
+    
+    if (threadIdx == 0u) {
+        let frameCount = camera.frame_count;
+        let seed1 = probeIndex + frameCount * 114514u;
+        let seed2 = pcg_hash(seed1);
+        let u1 = select(0.0, rand_float(seed1), rcParams.params.x > 0.0);
+        let u2 = select(0.0, rand_float(seed2), rcParams.params.x > 0.0); // Only jitter if hysteresis > 0
+
+        let z = u1 * 2.0 - 1.0;
+        let r = max(0.0, sqrt(1.0 - z * z));
+        let theta_axis = u2 * 2.0 * 3.14159265;
+        let axis = vec3f(r * cos(theta_axis), r * sin(theta_axis), z);
+        
+        let angle = select(0.0, rand_float(pcg_hash(seed2)) * 2.0 * 3.14159265, rcParams.params.x > 0.0);
+        probe_rotation = rotationMatrix(axis, angle);
+    }
+    workgroupBarrier();
 
     // Phase 1: Compute 84 rays across 64 threads. 
     // Thread i handles ray i. Threads 0..19 also handle rays 64..83.
@@ -163,6 +223,9 @@ fn main(
                 startDist = 12.0;
                 endDist = 1000.0;
             }
+            
+            // Apply spatiotemporal rotation jitter
+            rayDir = normalize(probe_rotation * rayDir);
 
             // Raymarch
             let hit = raymarchInterval(probeWorldPos, rayDir, startDist, endDist);
@@ -170,11 +233,11 @@ fn main(
             if (hit.w < 0.0 && rIdx >= 20u) {
                 // Miss on Cascade 2, sample environment map!
                 let envSample = textureSampleLevel(envMap, envSampler, rayDir, 0.0).rgb;
-                shared_radiance[rIdx] = min(envSample, vec3f(rcParams.params.y * 3.0));
+                shared_radiance[rIdx] = vec4f(min(envSample, vec3f(rcParams.params.y * 3.0)), 1.0);
             } else if (hit.w >= 0.0) {
-                shared_radiance[rIdx] = hit.rgb * rcParams.params.y;
+                shared_radiance[rIdx] = vec4f(hit.rgb * rcParams.params.y, 1.0);
             } else {
-                shared_radiance[rIdx] = vec3f(0.0); // Missed on near cascades, radiance comes from further cascades
+                shared_radiance[rIdx] = vec4f(0.0, 0.0, 0.0, -1.0); // Missed on near cascades
             }
         }
     }
@@ -193,29 +256,29 @@ fn main(
     let evalDir = octahedralToDir(uv);
 
     // Merge cascades (Cosine weighted integral)
+    // By strictly rejecting misses from near cascades, we effectively "merge" cascades 
+    // without expensive recursion: outer cascades provide the missing data.
     var finalRad = vec3f(0.0);
     var weightSum = 0.0;
     
-    // C0
-    for(var i=0u; i<4u; i++) {
-        let dir = fibonacciSphereDir(i, 4u);
+    // C0, C1, C2 inline merge
+    for(var i=0u; i<84u; i++) {
+        var dir: vec3f;
+        if (i < 4u) { dir = fibonacciSphereDir(i, 4u); }
+        else if (i < 20u) { dir = fibonacciSphereDir(i - 4u, 16u); }
+        else { dir = fibonacciSphereDir(i - 20u, 64u); }
+        
+        // Rotate integration direction by the identical matrix used for trace
+        dir = normalize(probe_rotation * dir);
+
         let w = max(0.0, dot(evalDir, dir));
-        finalRad += shared_radiance[i] * w;
-        weightSum += w;
-    }
-    // C1
-    for(var i=4u; i<20u; i++) {
-        let dir = fibonacciSphereDir(i - 4u, 16u);
-        let w = max(0.0, dot(evalDir, dir));
-        finalRad += shared_radiance[i] * w;
-        weightSum += w;
-    }
-    // C2
-    for(var i=20u; i<84u; i++) {
-        let dir = fibonacciSphereDir(i - 20u, 64u);
-        let w = max(0.0, dot(evalDir, dir));
-        finalRad += shared_radiance[i] * w;
-        weightSum += w;
+        let radHit = shared_radiance[i];
+
+        // Only incorporate rays that hit geometry OR hit the sky (C2 miss)
+        if (radHit.w >= 0.0) {
+            finalRad += radHit.rgb * w;
+            weightSum += w;
+        }
     }
     
     if (weightSum > 0.0) {
@@ -224,10 +287,10 @@ fn main(
     
     // Temporal blend with hysteresis
     let texelsPerProbe = 10u;
-    let probeGridW = gridX;
+    let probesPerRow = 800u;
     
-    let baseTexelX = (probeIndex % probeGridW) * texelsPerProbe + 1u;
-    let baseTexelY = (probeIndex / probeGridW) * texelsPerProbe + 1u;
+    let baseTexelX = (probeIndex % probesPerRow) * texelsPerProbe + 1u;
+    let baseTexelY = (probeIndex / probesPerRow) * texelsPerProbe + 1u;
     let atlasCoord = vec2i(i32(baseTexelX + texX), i32(baseTexelY + texY));
     
     let prevRad = textureLoad(rcAtlasRead, atlasCoord, 0).rgb;
