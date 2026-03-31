@@ -90,13 +90,24 @@ fn main(
     let metallic = specularData.g;
     
     var ao = specularData.b; // ambient occlusion from G-buffer
+    let shadingModelId = specularData.a;
     let ssao_val = textureLoad(ssaoTex, fragcoordi, 0).r;
     ao = ao * ssao_val;
 
     let N = normalize(nor_world);
     let V = normalize(camera.camera_pos.xyz - pos_world);
 
-    // ---- Direct lighting (PBR Cook-Torrance) using shared light list ----
+    // ---- Shading Model Dispatch ----
+    if (shadingModelId > 0.5) {
+        // SHADING_MODEL_UNLIT: output albedo directly (no lighting)
+        let mapped = albedo / (albedo + vec3f(1.0));
+        let corrected = pow(mapped, vec3f(1.0 / 2.2));
+        textureStore(outputTex, fragcoordi, vec4f(corrected, 1.0));
+        return;
+    }
+
+    // SHADING_MODEL_PBR: standard Cook-Torrance lighting
+    // ---- Direct lighting using shared light list ----
     var Lo = vec3f(0.0);
     let count = sharedLightCount;
     for (var i = 0u; i < count; i += 1u) {
