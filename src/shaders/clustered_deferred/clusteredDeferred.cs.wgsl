@@ -37,18 +37,43 @@
 // SSAO binding
 @group(${bindGroup_scene}) @binding(23) var ssaoTex: texture_2d<f32>;
 
+// Shared memory for tile light indices — pre-loaded by thread 0 of each workgroup
+const MAX_SHARED_LIGHTS: u32 = ${maxLightsPerCluster}u;
+var<workgroup> sharedLightCount: u32;
+var<workgroup> sharedLightIndices: array<u32, ${maxLightsPerCluster}>;
+
 @compute @workgroup_size(8, 8, 1)
 fn main(
-    @builtin(global_invocation_id) global_id: vec3u
+    @builtin(global_invocation_id) global_id: vec3u,
+    @builtin(local_invocation_index) local_idx: u32
 ) {
     let fragcoordi = vec2i(global_id.xy);
     let screen_pos_x = f32(global_id.x);
     let screen_pos_y = f32(global_id.y);
 
     let screen_dims = textureDimensions(albedoTex);
-    if (global_id.x >= screen_dims.x || global_id.y >= screen_dims.y) {
-        return;
+    let in_bounds = global_id.x < screen_dims.x && global_id.y < screen_dims.y;
+
+    // ---- Shared memory light list pre-loading ----
+    // Must happen before any early returns so ALL threads reach the barrier.
+    // Use center pixel of this workgroup tile for the cluster lookup.
+    let tile_center_x = f32(global_id.x - (global_id.x % 8u) + 4u);
+    let tile_center_y = f32(global_id.y - (global_id.y % 8u) + 4u);
+    // For the cluster Z, we need a world position — thread 0 reads the tile center pixel
+    if (local_idx == 0u) {
+        let center_coord = vec2i(i32(tile_center_x), i32(tile_center_y));
+        let center_pos = textureLoad(positionTex, center_coord, 0).xyz;
+        let cluster_index = getClusterIndex(vec2f(tile_center_x, tile_center_y), center_pos, camera, clusterSet);
+        let lightmeta = tileOffsets[cluster_index];
+        sharedLightCount = min(lightmeta.count, MAX_SHARED_LIGHTS);
+        for (var i = 0u; i < sharedLightCount; i++) {
+            sharedLightIndices[i] = globalLightIndices.indices[lightmeta.offset + i];
+        }
     }
+    workgroupBarrier();
+
+    // ---- Early exit for out-of-bounds or transparent pixels ----
+    if (!in_bounds) { return; }
 
     let diffuseColor = textureLoad(albedoTex, fragcoordi, 0);
     if (diffuseColor.a < 0.5f) {
@@ -71,46 +96,11 @@ fn main(
     let N = normalize(nor_world);
     let V = normalize(camera.camera_pos.xyz - pos_world);
 
-    // ---- Cluster lookup ----
-    let screen_width = f32(clusterSet.screen_width);
-    let screen_height = f32(clusterSet.screen_height);
-
-    let num_clusters_X = clusterSet.num_clusters_X;
-    let num_clusters_Y = clusterSet.num_clusters_Y;
-    let num_clusters_Z = clusterSet.num_clusters_Z;
-
-    let screen_size_cluster_x = screen_width / f32(num_clusters_X);
-    let screen_size_cluster_y = screen_height / f32(num_clusters_Y);
-
-    let clusterid_x = u32(screen_pos_x / screen_size_cluster_x);
-    let clusterid_y_unflipped = u32(screen_pos_y / screen_size_cluster_y);
-    let clusterid_y = clamp((num_clusters_Y - 1u) - clusterid_y_unflipped, 0u, num_clusters_Y - 1u);
-
-    let pos_view = (camera.view_mat * vec4f(pos_world, 1.0)).xyz;
-    let z_view = pos_view.z;
-
-    let near = camera.near_plane;
-    let far = camera.far_plane;
-    let clamped_Z_positive = clamp(-z_view, near, far);
-
-    let logFN = log(far / near);
-    let SCALE = f32(num_clusters_Z) / logFN;
-    let BIAS = SCALE * log(near);
-    let slice = log(clamped_Z_positive) * SCALE - BIAS;
-    let cluster_z = clamp(u32(floor(slice)), 0u, num_clusters_Z - 1u);
-
-    let cluster_index = cluster_z * (num_clusters_X * num_clusters_Y) +
-                          clusterid_y * num_clusters_X +
-                          clusterid_x;
-
-    let lightmeta = tileOffsets[cluster_index];
-    let offset = lightmeta.offset;
-    let count = lightmeta.count;
-
-    // ---- Direct lighting (PBR Cook-Torrance) ----
+    // ---- Direct lighting (PBR Cook-Torrance) using shared light list ----
     var Lo = vec3f(0.0);
+    let count = sharedLightCount;
     for (var i = 0u; i < count; i += 1u) {
-        let light_idx = globalLightIndices.indices[offset + i];
+        let light_idx = sharedLightIndices[i];
         let light = lightSet.lights[light_idx];
         Lo += calculateLightContribPBR(light, pos_world, N, V, albedo, metallic, roughness);
     }
@@ -146,12 +136,26 @@ fn main(
         // Evaluate Radiance Cascades
         let rc_totalIrr = evaluateRCProbes(pos_world, N, V, rcParams, rcIrradianceAtlas, rcSampler);
 
-        let scr_w = f32(clusterSet.screen_width);
-        let scr_h = f32(clusterSet.screen_height);
+        let rcDebugMode = i32(rcParams.debug.x);
+        if (rcDebugMode == 1) {
+            textureStore(outputTex, fragcoordi, vec4f(rc_totalIrr * rcParams.params.y, 1.0));
+            return;
+        } else if (rcDebugMode == 2) {
+            let scr_w = f32(clusterSet.screen_width);
+            let scr_h = f32(clusterSet.screen_height);
+            let uv = vec2f(f32(global_id.x), f32(global_id.y)) / vec2f(scr_w, scr_h);
+            if (uv.x > 0.6 && uv.y < 0.4) {
+                let atlasUV = vec2f((uv.x - 0.6) / 0.4, uv.y / 0.4);
+                let atlasColor = textureSampleLevel(rcIrradianceAtlas, rcSampler, atlasUV, 0.0).rgb;
+                textureStore(outputTex, fragcoordi, vec4f(atlasColor * 2.0, 1.0));
+                return;
+            }
+        }
+
         let fragcoord_xy = vec2f(fragcoordi) + vec2f(0.5);
         diffuseAmbient = evaluateHybridSSGI(
             fragcoord_xy, pos_world, N, albedo, rc_totalIrr, iblIrradiance,
-            camera, scr_w, scr_h, positionTex, albedoTex, rcParams.params.w 
+            camera, f32(clusterSet.screen_width), f32(clusterSet.screen_height), positionTex, albedoTex, rcParams.params.w 
         );
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode: sample the neural radiance cache inference texture
@@ -164,7 +168,7 @@ fn main(
         diffuseAmbient = max(nrcBounce, iblFloor2);
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
-        let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(screen_width, screen_height);
+        let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
         let surfelIrradiance = evaluateSurfel(screenUV, surfelIrradianceTex);
         let surfelBounce = surfelIrradiance * albedo * surfelParams.y; // apply intensity
         let iblFloor3 = iblIrradiance * albedo * 0.05;

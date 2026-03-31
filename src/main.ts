@@ -171,6 +171,7 @@ gui.add(currentGIMode, 'mode', giModes).name('RT GI Mode').onChange((mode: strin
     stage.ddgi.updateUniforms();
     stage.radianceCascades.updateUniforms();
 });
+gui.add(stage, 'showGIBounds').name('Show GI Grid Bounds');
 
 // =========== Radiance Cascades ===========
 const rcFolder = gui.addFolder('Radiance Cascades');
@@ -181,6 +182,10 @@ rcFolder.add(stage.radianceCascades, 'ambient', 0.0, 1.0).step(0.01).name('Ambie
     stage.radianceCascades.updateUniforms();
 });
 rcFolder.add(stage.radianceCascades, 'hysteresis', 0.0, 0.999).step(0.001).name('Hysteresis').onChange(() => {
+    stage.radianceCascades.updateUniforms();
+});
+const rcDebugModes = { Off: 0, 'Show GI Only': 1, 'Show Probe Atlas': 2 };
+rcFolder.add(stage.radianceCascades, 'debugMode', rcDebugModes).name('Debug Mode').onChange(() => {
     stage.radianceCascades.updateUniforms();
 });
 

@@ -1,20 +1,18 @@
-// CHECKITOUT: this file loads all the shaders and preprocesses them with some common code
+// Shader loader — preprocesses all shaders with common code and constants
 
 import commonRaw from './core/common.wgsl?raw';
 import standardMaterialRaw from './materials/standard_material.wgsl?raw';
 import unlitMaterialRaw from './materials/unlit_material.wgsl?raw';
 import giEvaluationRaw from './core/gi_evaluation.wgsl?raw';
 
-import naiveVertRaw from './core/naive.vs.wgsl?raw';
-import naiveFragRaw from './core/naive.fs.wgsl?raw';
+import standardVertRaw from './core/standard.vs.wgsl?raw';
 
 import geometryFragRaw from './core/geometry.fs.wgsl?raw';
 
 import forwardPlusFragRaw from './forward_plus/forward_plus.fs.wgsl?raw';
 
-import clusteredDeferredFragRaw from './clustered_deferred/clustered_deferred.fs.wgsl?raw';
-import clusteredDeferredFullscreenVertRaw from './clustered_deferred/clustered_deferred_fullscreen.vs.wgsl?raw';
-import clusteredDeferredFullscreenFragRaw from './clustered_deferred/clustered_deferred_fullscreen.fs.wgsl?raw';
+import fullscreenBlitVertRaw from './core/fullscreen_blit.vs.wgsl?raw';
+import fullscreenBlitFragRaw from './core/fullscreen_blit.fs.wgsl?raw';
 
 import clusteredDeferredComputeSrcRaw from './clustered_deferred/clusteredDeferred.cs.wgsl?raw';
 
@@ -22,6 +20,7 @@ import moveLightsComputeRaw from './forward_plus/move_lights.cs.wgsl?raw';
 import clusteringComputeRaw from './forward_plus/clustering.cs.wgsl?raw';
 
 import zPrepassFragRaw from './core/zPrepass.fs.wgsl?raw';
+import debugBoxRaw from './core/debug_box.wgsl?raw';
 
 // IBL shaders
 import generateCubemapRaw from './ibl/generate_cubemap.cs.wgsl?raw';
@@ -106,9 +105,9 @@ export const constants = {
     lightRadius: 2,
 
     // Radiance Cascades
-    rcProbeGridX: 8,
-    rcProbeGridY: 8,
-    rcProbeGridZ: 8,
+    rcProbeGridX: 64, // 28m / 64 = 0.43m
+    rcProbeGridY: 48, // 20m / 48 = 0.41m
+    rcProbeGridZ: 32, // 14m / 32 = 0.43m
     rcIrradianceTexels: 8,
 
     // DDGI
@@ -170,8 +169,7 @@ function processShaderRaw(raw: string) {
     return commonSrc + giEvaluationSrc + evalShaderRaw(raw);
 }
 
-export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);
-export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
+export const standardVertSrc: string = processShaderRaw(standardVertRaw);
 
 const discardRegex = /if\s*\(surf\.alpha\s*<\s*0\.5f?\)\s*\{\s*discard;\s*\}/g;
 
@@ -189,9 +187,8 @@ export function buildForwardPlusShader(materialType: string, isOpaque: boolean):
     return commonSrc + matSrc + giEvaluationSrc + raw; 
 }
 
-export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
-export const clusteredDeferredFullscreenVertSrc: string = processShaderRaw(clusteredDeferredFullscreenVertRaw);
-export const clusteredDeferredFullscreenFragSrc: string = processShaderRaw(clusteredDeferredFullscreenFragRaw);
+export const fullscreenBlitVertSrc: string = processShaderRaw(fullscreenBlitVertRaw);
+export const fullscreenBlitFragSrc: string = processShaderRaw(fullscreenBlitFragRaw);
 
 export const clusteredDeferredComputeSrc: string = processShaderRaw(clusteredDeferredComputeSrcRaw);
 
@@ -202,6 +199,8 @@ export function buildZPrepassShader(materialType: string): string {
     const matSrc = materials[materialType] || materials['standard'];
     return commonSrc + matSrc + evalShaderRaw(zPrepassFragRaw);
 }
+
+export const debugBoxSrc: string = processShaderRaw(debugBoxRaw);
 
 // IBL shaders (standalone, not prepended with common)
 export const generateCubemapSrc = generateCubemapRaw;

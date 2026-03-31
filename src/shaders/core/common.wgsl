@@ -34,7 +34,7 @@ struct CameraUniforms {
     view_mat: mat4x4f,
     near_plane: f32,
     far_plane: f32,
-    _pad0: f32,
+    frame_count: u32,
     _pad1: f32,
     camera_pos: vec4f,
 }
@@ -45,6 +45,34 @@ struct ClusterSet {
     num_clusters_X: u32,
     num_clusters_Y: u32,
     num_clusters_Z: u32
+}
+
+// Shared cluster lookup — maps screen position + world position to a linear cluster index
+fn getClusterIndex(
+    screen_pos: vec2f,
+    pos_world: vec3f,
+    cam: CameraUniforms,
+    cs: ClusterSet
+) -> u32 {
+    let screen_size_cluster_x = f32(cs.screen_width) / f32(cs.num_clusters_X);
+    let screen_size_cluster_y = f32(cs.screen_height) / f32(cs.num_clusters_Y);
+
+    let clusterid_x = u32(screen_pos.x / screen_size_cluster_x);
+    let clusterid_y_unflipped = u32(screen_pos.y / screen_size_cluster_y);
+    let clusterid_y = clamp((cs.num_clusters_Y - 1u) - clusterid_y_unflipped, 0u, cs.num_clusters_Y - 1u);
+
+    let z_view = (cam.view_mat * vec4f(pos_world, 1.0)).z;
+    let clamped_Z = clamp(-z_view, cam.near_plane, cam.far_plane);
+
+    let logFN = log(cam.far_plane / cam.near_plane);
+    let SCALE = f32(cs.num_clusters_Z) / logFN;
+    let BIAS = SCALE * log(cam.near_plane);
+    let slice = log(clamped_Z) * SCALE - BIAS;
+    let cluster_z = clamp(u32(floor(slice)), 0u, cs.num_clusters_Z - 1u);
+
+    return cluster_z * (cs.num_clusters_X * cs.num_clusters_Y)
+         + clusterid_y * cs.num_clusters_X
+         + clusterid_x;
 }
 
 // ============================
@@ -428,6 +456,7 @@ struct RCUniforms {
     grid_spacing: vec4f,
     atlas_dims: vec4f,
     params: vec4f, // x = hysteresis, y = intensity, z = ambient, w = enabled
+    debug: vec4f,  // x = debug_mode (0=Off, 1=GI Only, 2=Atlas PIP)
 }
 
 // ============================

@@ -16,8 +16,9 @@ export class RadianceCascades {
     static readonly TEXELS = shaders.constants.rcIrradianceTexels; // 8
     static readonly TEXELS_WITH_BORDER = RadianceCascades.TEXELS + 2; // 10
 
-    static readonly ATLAS_W = RadianceCascades.GRID_X * RadianceCascades.TEXELS_WITH_BORDER;
-    static readonly ATLAS_H = (RadianceCascades.GRID_Y * RadianceCascades.GRID_Z) * RadianceCascades.TEXELS_WITH_BORDER;
+    static readonly PROBES_PER_ROW = 800; // Fixed width to prevent exceeding WebGPU maxTextureDimension2D (8192)
+    static readonly ATLAS_W = RadianceCascades.PROBES_PER_ROW * RadianceCascades.TEXELS_WITH_BORDER;
+    static readonly ATLAS_H = Math.ceil(RadianceCascades.TOTAL_PROBES / RadianceCascades.PROBES_PER_ROW) * RadianceCascades.TEXELS_WITH_BORDER;
 
     // World-space bounds
     gridMin: [number, number, number] = [-14, -4, -7];
@@ -27,6 +28,7 @@ export class RadianceCascades {
     intensity = 1.0;
     ambient = 0.05;
     enabled = false;
+    debugMode = 0; // 0=Off, 1=GI Only, 2=Atlas Overlay
 
     rcAtlasA: GPUTexture;
     rcAtlasB: GPUTexture;
@@ -110,6 +112,7 @@ export class RadianceCascades {
         f32View[12] = spacing[0]; f32View[13] = spacing[1]; f32View[14] = spacing[2]; f32View[15] = 0;
         f32View[16] = RadianceCascades.TEXELS; f32View[17] = RadianceCascades.TEXELS_WITH_BORDER; f32View[18] = RadianceCascades.ATLAS_W; f32View[19] = RadianceCascades.ATLAS_H;
         f32View[20] = this.hysteresis; f32View[21] = this.intensity; f32View[22] = this.ambient; f32View[23] = this.enabled ? 1.0 : 0.0;
+        f32View[24] = this.debugMode; f32View[25] = 0; f32View[26] = 0; f32View[27] = 0;
         
         device.queue.writeBuffer(this.rcUniformBuffer, 0, data);
     }
@@ -159,7 +162,8 @@ export class RadianceCascades {
         const tracePass = encoder.beginComputePass({ label: "RC Trace" });
         tracePass.setPipeline(this.tracePipeline);
         tracePass.setBindGroup(0, traceBindGroup);
-        tracePass.dispatchWorkgroups(RadianceCascades.TOTAL_PROBES, 1, 1);
+        // Dispatch as 2D grid to bypass WebGPU maxComputeWorkgroupsPerDimension (65535) limit
+        tracePass.dispatchWorkgroups(RadianceCascades.GRID_X, RadianceCascades.GRID_Y * RadianceCascades.GRID_Z, 1);
         tracePass.end();
 
         this.pingPong = 1 - this.pingPong;

@@ -32,6 +32,8 @@ export class Stage {
     sunVolumetricSteps: number = 16;
     sunEnabled: boolean = true;
 
+    showGIBounds: boolean = false;
+
     constructor(scene: Scene, lights: Lights, camera: Camera, stats: Stats, environment: Environment) {
         this.scene = scene;
         this.lights = lights;

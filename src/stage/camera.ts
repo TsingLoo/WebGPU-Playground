@@ -5,6 +5,7 @@ import { device, canvas, fovYDegrees, aspectRatio } from "../renderer";
 class CameraUniforms {
     readonly buffer = new ArrayBuffer((16 + 16 + 16 + 16 + 4 + 4) * 4); 
     private readonly floatView = new Float32Array(this.buffer);
+    private readonly uintView = new Uint32Array(this.buffer);
 
     set viewProjMat(mat: Float32Array) {
         // TODO-1.1: set the first 16 elements of `this.floatView` to the input `mat`
@@ -37,6 +38,10 @@ class CameraUniforms {
         this.floatView[70] = pos[2];
         this.floatView[71] = 1.0; // padding
     }
+
+    set frameCount(value: number) {
+        this.uintView[66] = value;
+    }
 }
 
 export class Camera {
@@ -57,6 +62,7 @@ export class Camera {
     static readonly farPlane = 1000;
 
     keys: { [key: string]: boolean } = {};
+    frameCount: number = 0;
 
     constructor () {
         // TODO-1.1: set `this.uniformsBuffer` to a new buffer of size `this.uniforms.buffer.byteLength`
@@ -168,6 +174,7 @@ export class Camera {
         this.uniforms.nearPlane = Camera.nearPlane;
         this.uniforms.farPlane = Camera.farPlane;
         this.uniforms.cameraWorldPos = this.cameraPos as Float32Array;
+        this.uniforms.frameCount = this.frameCount++;
 
         // TODO-2: write to extra buffers needed for light clustering here
 

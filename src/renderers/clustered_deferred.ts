@@ -149,13 +149,13 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
             }),
             vertex: {
                 module: renderer.device.createShaderModule({
-                    code: shaders.clusteredDeferredFullscreenVertSrc
+                    code: shaders.fullscreenBlitVertSrc
                 }),
                 entryPoint: "main"
             },
             fragment: {
                 module: renderer.device.createShaderModule({
-                    code: shaders.clusteredDeferredFullscreenFragSrc
+                    code: shaders.fullscreenBlitFragSrc
                 }),
                 entryPoint: "main",
                 targets: [{ format: renderer.canvasFormat }]
