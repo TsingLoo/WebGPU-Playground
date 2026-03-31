@@ -69,7 +69,7 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 { binding: 18, resource: this.gBufferAlbedoTextureView },
                 { binding: 19, resource: this.dummyTextureView },
                 { binding: 20, resource: { buffer: this.dummyBuffer } },
-                { binding: 21, resource: this.ssaoBlurredTextureView },
+                { binding: 21, resource: this.ssaoPass.blurredTextureView },
             ]
         });
 
