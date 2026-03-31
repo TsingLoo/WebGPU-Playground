@@ -4,6 +4,7 @@ import commonRaw from './core/common.wgsl?raw';
 import standardMaterialRaw from './materials/standard_material.wgsl?raw';
 import unlitMaterialRaw from './materials/unlit_material.wgsl?raw';
 import giEvaluationRaw from './gi/gi_evaluation.wgsl?raw';
+import lightingCompositeRaw from './core/lighting_composite.wgsl?raw';
 
 import standardVertRaw from './core/standard.vs.wgsl?raw';
 
@@ -157,6 +158,7 @@ function evalShaderRaw(raw: string) {
 
 const commonSrc: string = evalShaderRaw(commonRaw);
 const giEvaluationSrc: string = evalShaderRaw(giEvaluationRaw);
+const lightingCompositeSrc: string = evalShaderRaw(lightingCompositeRaw);
 const standardMaterialSrc: string = evalShaderRaw(standardMaterialRaw);
 const unlitMaterialSrc: string = evalShaderRaw(unlitMaterialRaw);
 
@@ -184,13 +186,13 @@ export function buildForwardPlusShader(materialType: string, isOpaque: boolean):
     const matSrc = materials[materialType] || materials['standard'];
     let raw = evalShaderRaw(forwardPlusFragRaw);
     if (isOpaque) raw = raw.replace(discardRegex, '');
-    return commonSrc + matSrc + giEvaluationSrc + raw; 
+    return commonSrc + matSrc + lightingCompositeSrc + giEvaluationSrc + raw; 
 }
 
 export const fullscreenBlitVertSrc: string = processShaderRaw(fullscreenBlitVertRaw);
 export const fullscreenBlitFragSrc: string = processShaderRaw(fullscreenBlitFragRaw);
 
-export const clusteredDeferredComputeSrc: string = processShaderRaw(clusteredDeferredComputeSrcRaw);
+export const clusteredDeferredComputeSrc: string = commonSrc + lightingCompositeSrc + giEvaluationSrc + evalShaderRaw(clusteredDeferredComputeSrcRaw);
 
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);

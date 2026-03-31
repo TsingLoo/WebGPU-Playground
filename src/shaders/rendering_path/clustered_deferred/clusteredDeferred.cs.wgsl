@@ -12,7 +12,7 @@
 @group(${bindGroup_scene}) @binding(10) var outputTex: texture_storage_2d<rgba8unorm, write>;
 @group(${bindGroup_scene}) @binding(11) var irradianceMap: texture_cube<f32>;
 @group(${bindGroup_scene}) @binding(12) var prefilteredMap: texture_cube<f32>;
-@group(${bindGroup_scene}) @binding(13) var brdfLutTex: texture_2d<f32>;
+@group(${bindGroup_scene}) @binding(13) var brdfLut: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(14) var iblSampler: sampler;
 @group(1) @binding(0) var ddgiIrradianceAtlas: texture_2d<f32>;
 @group(1) @binding(1) var ddgiVisibilityAtlas: texture_2d<f32>;
@@ -109,23 +109,8 @@ fn main(
     let shadow = calculateShadowVSM(vsmPhysAtlas, vsmUniforms, sunLight, pos_world, N);
     Lo += calculateSunLightPBR(sunLight, pos_world, N, V, albedo, metallic, roughness, shadow);
 
-    // ---- IBL Ambient (split-sum approximation) ----
-    let F0 = mix(vec3f(0.04), albedo, metallic);
-    let NdotV = max(dot(N, V), 0.0);
-    let F = fresnelSchlickRoughness(NdotV, F0, roughness);
-
-    let kS = F;
-    let kD = (vec3f(1.0) - kS) * (1.0 - metallic);
-
-    // Diffuse IBL from preconvolved irradiance map
-    let iblIrradiance = textureSampleLevel(irradianceMap, iblSampler, N, 0.0).rgb;
-
-    // Specular IBL (split-sum)
-    let R = reflect(-V, N);
-    let maxLod = 4.0;
-    let prefilteredColor = textureSampleLevel(prefilteredMap, iblSampler, R, roughness * maxLod).rgb;
-    let brdfVal = textureSampleLevel(brdfLutTex, iblSampler, vec2f(NdotV, roughness), 0.0).rg;
-    let specularIBL = prefilteredColor * (F * brdfVal.x + brdfVal.y);
+    // ---- IBL Ambient (shared split-sum) ----
+    let ibl = computeIBL(N, V, albedo, metallic, roughness);
 
     // Build ambient: scale IBL independently from RC
     var diffuseAmbient = vec3f(0.0);
@@ -154,40 +139,31 @@ fn main(
 
         let fragcoord_xy = vec2f(fragcoordi) + vec2f(0.5);
         diffuseAmbient = evaluateHybridSSGI(
-            fragcoord_xy, pos_world, N, albedo, rc_totalIrr, iblIrradiance,
+            fragcoord_xy, pos_world, N, albedo, rc_totalIrr, ibl.iblIrradiance,
             camera, f32(clusterSet.screen_width), f32(clusterSet.screen_height), positionTex, albedoTex, rcParams.params.w 
         );
     } else if (nrcParams.scene_min.w > 0.5) {
-        // NRC mode: sample the neural radiance cache inference texture
-        // Map global_id back to screen UV
+        // NRC mode
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
         let nrcIrradiance = evaluateNRC(screenUV, nrcInferenceTex);
-        // NRC provides cached irradiance; apply albedo modulation
         let nrcBounce = nrcIrradiance * albedo;
-        let iblFloor2 = iblIrradiance * albedo * 0.15;
+        let iblFloor2 = ibl.iblIrradiance * albedo * 0.15;
         diffuseAmbient = max(nrcBounce, iblFloor2);
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
         let surfelIrradiance = evaluateSurfel(screenUV, surfelIrradianceTex);
-        let surfelBounce = surfelIrradiance * albedo * surfelParams.y; // apply intensity
-        let iblFloor3 = iblIrradiance * albedo * 0.05;
+        let surfelBounce = surfelIrradiance * albedo * surfelParams.y;
+        let iblFloor3 = ibl.iblIrradiance * albedo * 0.05;
         diffuseAmbient = max(surfelBounce, iblFloor3);
     } else {
         // No DDGI/NRC/Surfel: use IBL irradiance with moderate scaling
-        diffuseAmbient = iblIrradiance * albedo * 1.0;
+        diffuseAmbient = ibl.iblIrradiance * albedo * 1.0;
     }
 
-    // Combine: GI diffuse (unscaled) + specular IBL
+    // Composite and tone map (shared)
     let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
-    let specIBLScale = select(0.6, 0.0, isGIActive);
-    let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
-    let finalColor = ambient + Lo;
-
-    // Tone mapping (Reinhard)
-    let mapped = finalColor / (finalColor + vec3f(1.0));
-    // Gamma correction
-    let corrected = pow(mapped, vec3f(1.0/2.2));
+    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, isGIActive);
 
     textureStore(outputTex, fragcoordi, vec4f(corrected, 1.0));
 }
