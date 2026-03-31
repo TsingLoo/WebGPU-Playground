@@ -148,11 +148,7 @@ fn main(
             }
         }
 
-        let fragcoord_xy = vec2f(fragcoordi) + vec2f(0.5);
-        diffuseAmbient = evaluateHybridSSGI(
-            fragcoord_xy, pos_world, N, albedo, rc_totalIrr, ibl.iblIrradiance,
-            camera, f32(clusterSet.screen_width), f32(clusterSet.screen_height), positionTex, albedoTex, rcParams.params.w 
-        );
+        diffuseAmbient = max(rc_totalIrr * albedo, ibl.iblIrradiance * albedo * 0.25);
     } else if (nrcParams.scene_min.w > 0.5) {
         // NRC mode
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);

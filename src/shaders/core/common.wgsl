@@ -412,13 +412,12 @@ fn ddgiIrradianceTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> 
     let cornerX = f32(probeCol * texelDimBorder + 1); // +1 for border
     let cornerY = f32(probeRow * texelDimBorder + 1);
 
-    // Inset UVs by half texel to avoid sampling from uninitialized border
-    let inset = 0.5 / f32(texelDim);
-    let safeUV = clamp(octUV, vec2f(inset), vec2f(1.0 - inset));
-
-    // UV within probe texel region
-    let texelX = cornerX + safeUV.x * f32(texelDim - 1);
-    let texelY = cornerY + safeUV.y * f32(texelDim - 1);
+    // To prevent bilinear sampling from hitting the uninitialized 1px border,
+    // we map the [0, 1] octUV exactly to the pixel centers of the outermost valid texels.
+    // The inner valid range goes from 0.5 to (texelDim - 0.5).
+    let clampedUV = clamp(octUV, vec2f(0.0), vec2f(1.0));
+    let texelX = cornerX + 0.5 + clampedUV.x * (f32(texelDim) - 1.0);
+    let texelY = cornerY + 0.5 + clampedUV.y * (f32(texelDim) - 1.0);
 
     return vec2f(texelX / atlasWidth, texelY / atlasHeight);
 }
@@ -437,12 +436,10 @@ fn ddgiVisibilityTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> 
     let cornerX = f32(probeCol * texelDimBorder + 1);
     let cornerY = f32(probeRow * texelDimBorder + 1);
 
-    // Inset UVs by half texel to avoid sampling from uninitialized border
-    let inset = 0.5 / f32(texelDim);
-    let safeUV = clamp(octUV, vec2f(inset), vec2f(1.0 - inset));
-
-    let texelX = cornerX + safeUV.x * f32(texelDim - 1);
-    let texelY = cornerY + safeUV.y * f32(texelDim - 1);
+    // Map [0, 1] UV to the centers of the outermost valid texels to strictly avoid black borders
+    let clampedUV = clamp(octUV, vec2f(0.0), vec2f(1.0));
+    let texelX = cornerX + 0.5 + clampedUV.x * (f32(texelDim) - 1.0);
+    let texelY = cornerY + 0.5 + clampedUV.y * (f32(texelDim) - 1.0);
 
     return vec2f(texelX / atlasWidth, texelY / atlasHeight);
 }

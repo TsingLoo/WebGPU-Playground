@@ -4,13 +4,29 @@
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(0) @binding(1) var<uniform> ddgi: DDGIUniforms;
 @group(0) @binding(2) var<uniform> randomRotation: mat4x4f;
-@group(0) @binding(3) var voxelGrid: texture_3d<f32>;
-@group(0) @binding(4) var envMap: texture_cube<f32>;
-@group(0) @binding(5) var envSampler: sampler;
-@group(0) @binding(6) var<storage, read_write> rayData: array<vec4f>; // [radiance.rgb, hitDist]
-@group(0) @binding(7) var<uniform> sunLight: SunLight;
-@group(0) @binding(8) var vsmPhysAtlas: texture_depth_2d;
-@group(0) @binding(9) var<uniform> vsmUniforms: VSMUniforms;
+@group(0) @binding(3) var<storage, read> bvhNodes: array<BVHNode>;
+@group(0) @binding(4) var<storage, read> bvhPositions: array<vec4f>;
+@group(0) @binding(5) var<storage, read> bvhIndices: array<vec4u>;
+
+struct MaterialData {
+    baseColor: vec4f,
+    roughness: f32,
+    metallic: f32,
+    pad0: f32,
+    pad1: f32,
+}
+@group(0) @binding(6) var<storage, read> materials: array<MaterialData>;
+
+@group(0) @binding(7) var ddgiIrrAtlas: texture_2d<f32>;
+@group(0) @binding(8) var ddgiVisAtlas: texture_2d<f32>;
+@group(0) @binding(9) var ddgiSampler: sampler;
+
+@group(0) @binding(10) var envMap: texture_cube<f32>;
+@group(0) @binding(11) var envSampler: sampler;
+@group(0) @binding(12) var<storage, read_write> rayData: array<vec4f>; // [radiance.rgb, hitDist]
+@group(0) @binding(13) var<uniform> sunLight: SunLight;
+@group(0) @binding(14) var vsmPhysAtlas: texture_depth_2d;
+@group(0) @binding(15) var<uniform> vsmUniforms: VSMUniforms;
 
 const DDGI_RAYS_PER_PROBE: u32 = ${ddgiRaysPerProbe}u;
 const GOLDEN_RATIO: f32 = 1.618033988749895;
@@ -49,64 +65,45 @@ fn main(
     var hitRadiance = vec3f(0.0);
     var hitDist = -1.0; 
 
-    // Scene Voxel Bounds (matching scene.ts limits)
-    let vMin = vec3f(-15.0, 0.0, -10.0);
-    let vMax = vec3f(15.0, 15.0, 10.0);
-    let textureDims = vec3f(128.0, 128.0, 128.0);
-    let vExtent = vMax - vMin;
+    // BVH Software Raycast
+    var ray: Ray;
+    ray.origin = probeWorldPos;
+    ray.direction = rotatedDir;
 
-    // AABB Intersection to narrow ray bounds
-    var tMin = 0.0;
-    var tMax = 100.0;
-    for (var j = 0; j < 3; j++) {
-        if (abs(rotatedDir[j]) > 0.0001) {
-            let invD = 1.0 / rotatedDir[j];
-            let t0 = (vMin[j] - probeWorldPos[j]) * invD;
-            let t1 = (vMax[j] - probeWorldPos[j]) * invD;
-            tMin = max(tMin, min(t0, t1));
-            tMax = min(tMax, max(t0, t1));
-        } else {
-            if (probeWorldPos[j] < vMin[j] || probeWorldPos[j] > vMax[j]) {
-                tMax = -1.0; // miss completely
-            }
-        }
-    }
+    let hit = bvhIntersectFirstHit(&bvhNodes, &bvhPositions, &bvhIndices, ray);
 
-    if (tMax >= tMin && tMax > 0.0) {
-        let maxRayDist = min(tMax, 100.0);
-        let rayStart = max(0.0, tMin) + 0.1; // push slightly over probe epsilon
-        let stepSize = min(min(vExtent.x, vExtent.y), vExtent.z) / 256.0; // half voxel
+    if (hit.didHit) {
+        hitDist = hit.dist;
+        let matId = hit.indices.w;
+        let mat = materials[matId];
         
-        var t = rayStart;
-        while (t <= maxRayDist) {
-            let pos = probeWorldPos + rotatedDir * t;
-            let uvw = (pos - vMin) / vExtent;
-            let coord = vec3i(uvw * textureDims);
-            
-            // Bounds check just to be safe
-            if (coord.x >= 0 && coord.y >= 0 && coord.z >= 0 && coord.x < 128 && coord.y < 128 && coord.z < 128) {
-                let voxel = textureLoad(voxelGrid, coord, 0);
-                if (voxel.a > 0.5) {
-                    hitDist = t;
-                    
-                    let normal = normalize(voxel.rgb * 2.0 - 1.0);
-                    var hitLighting = vec3f(0.0);
-                    
-                    // Direct Sun evaluation
-                    if (sunLight.color.a > 0.5) {
-                        let sunShadow = calculateShadowVSMSimple(vsmPhysAtlas, vsmUniforms, sunLight, pos, normal);
-                        let sunL = normalize(sunLight.direction.xyz);
-                        let sunNdotL = max(dot(normal, sunL), 0.0);
-                        hitLighting += sunLight.color.rgb * sunLight.direction.w * sunNdotL * sunShadow;
-                    }
-                    
-                    hitLighting += vec3f(ddgi.ddgi_enabled.z); // minimal ambient
-                    hitRadiance = vec3f(0.1) * hitLighting; // diffuse 50% albedo proxy
-                    break;
-                }
-            }
-            t += stepSize;
+        let pos = probeWorldPos + rotatedDir * hitDist;
+        // Convert to properly outward-facing geometric normal
+        let normal = normalize(hit.normal); 
+        
+        var hitLighting = vec3f(0.0);
+        
+        // Direct Sun evaluation
+        if (sunLight.color.a > 0.5) {
+            let sunShadow = calculateShadowVSMSimple(vsmPhysAtlas, vsmUniforms, sunLight, pos, normal);
+            let sunL = normalize(sunLight.direction.xyz);
+            let sunNdotL = max(dot(normal, sunL), 0.0);
+            hitLighting += sunLight.color.rgb * sunLight.direction.w * sunNdotL * sunShadow;
         }
+        
+        // Recursive Indirect DDGI evaluation! (Infinite Bounces)
+        // Using evaluateDDGI which correctly biases away from the hit surface
+        var indirect = evaluateDDGI(pos, normal, -rotatedDir, ddgi, ddgiIrrAtlas, ddgiVisAtlas, ddgiSampler);
+        
+        // Filter out NaNs which can propagate through the network and cause black dots
+        if (any(indirect != indirect) || any(indirect < vec3f(0.0))) {
+            indirect = vec3f(0.0);
+        }
+        
+        hitLighting += indirect;
+
+        // Apply diffuse BRDF
+        hitRadiance = mat.baseColor.rgb * hitLighting / PI; 
     }
 
     if (hitDist < 0.0) {

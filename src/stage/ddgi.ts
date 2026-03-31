@@ -2,6 +2,7 @@ import { device } from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
 import { Environment } from './environment';
+import { BVHData } from './bvh_builder';
 
 /**
  * DDGI (Dynamic Diffuse Global Illumination) manager.
@@ -37,7 +38,6 @@ export class DDGI {
     normalBias = 0.25;
     viewBias = 0.1;
     probeTraceAmbient = 0.3;
-    ssgiEnabled = true;
 
     enabled = false;
     debugMode = 0; // 0=off, 1=irradiance, 2=visibility
@@ -270,7 +270,7 @@ export class DDGI {
         f32View[28] = this.enabled ? 1.0 : 0.0;
         f32View[29] = this.debugMode;
         f32View[30] = this.probeTraceAmbient;
-        f32View[31] = this.ssgiEnabled ? 1.0 : 0.0;
+        f32View[31] = 0.0;
 
         device.queue.writeBuffer(this.ddgiUniformBuffer, 0, data);
     }
@@ -309,13 +309,19 @@ export class DDGI {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // camera
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // ddgi uniforms
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // random rotation
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '3d' } }, // voxelGrid
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: 'cube' } }, // env map
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, sampler: {} },                     // env sampler
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },     // ray data
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // sun light
-                { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'depth' } }, // VSM physical atlas
-                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },     // VSM uniforms
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvhNodes
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvhPositions
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvhIndices
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // materials
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } }, // irradiance atlas
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d' } }, // visibility atlas
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, sampler: {} }, // ddgi sampler
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: 'cube' } }, // env map
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, sampler: {} },                     // env sampler
+                { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },     // ray data
+                { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // sun light
+                { binding: 14, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'depth' } }, // VSM physical atlas
+                { binding: 15, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },     // VSM uniforms
             ]
         });
     }
@@ -362,7 +368,8 @@ export class DDGI {
      */
     update(
         encoder: GPUCommandEncoder,
-        voxelGridView: GPUTextureView,
+        bvhData: BVHData,
+        globalMaterialBuffer: GPUBuffer,
         sunLightBuffer: GPUBuffer,
         shadowMapView: GPUTextureView,
         vsmUniformBuffer: GPUBuffer,
@@ -385,13 +392,19 @@ export class DDGI {
                 { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
                 { binding: 1, resource: { buffer: this.ddgiUniformBuffer } },
                 { binding: 2, resource: { buffer: this.randomRotationBuffer } },
-                { binding: 3, resource: voxelGridView },
-                { binding: 4, resource: this.environment.envCubemapView },
-                { binding: 5, resource: this.environment.envSampler },
-                { binding: 6, resource: { buffer: this.rayDataBuffer } },
-                { binding: 7, resource: { buffer: sunLightBuffer } },
-                { binding: 8, resource: shadowMapView },
-                { binding: 9, resource: { buffer: vsmUniformBuffer } },
+                { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
+                { binding: 4, resource: { buffer: bvhData.positionBuffer } },
+                { binding: 5, resource: { buffer: bvhData.indexBuffer } },
+                { binding: 6, resource: { buffer: globalMaterialBuffer } },
+                { binding: 7, resource: readIrr },
+                { binding: 8, resource: readVis },
+                { binding: 9, resource: this.ddgiSampler },
+                { binding: 10, resource: this.environment.envCubemapView },
+                { binding: 11, resource: this.environment.envSampler },
+                { binding: 12, resource: { buffer: this.rayDataBuffer } },
+                { binding: 13, resource: { buffer: sunLightBuffer } },
+                { binding: 14, resource: shadowMapView },
+                { binding: 15, resource: { buffer: vsmUniformBuffer } },
             ]
         });
 
