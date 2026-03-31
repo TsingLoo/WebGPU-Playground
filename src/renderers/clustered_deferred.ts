@@ -91,7 +91,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 20, resource: { buffer: this.dummyBuffer } },
                 { binding: 21, resource: this.dummyTextureView },
                 { binding: 22, resource: { buffer: this.dummyBuffer } },
-                { binding: 23, resource: this.ssaoBlurredTextureView },
+                { binding: 23, resource: this.ssaoPass.blurredTextureView },
             ]
         });
         

@@ -1,0 +1,125 @@
+import * as renderer from '../../renderer';
+import * as shaders from '../../shaders/shaders';
+import { VSM } from '../../stage/vsm';
+
+export interface VolumetricPassDeps {
+    cameraBuffer: GPUBuffer;
+    depthTextureView: GPUTextureView;
+    sunLightBuffer: GPUBuffer;
+    vsm: VSM;
+}
+
+export class VolumetricPass {
+    private volumetricTexture: GPUTexture;
+    private volumetricTextureView: GPUTextureView;
+
+    private generatorPipeline: GPURenderPipeline;
+    private generatorBindGroup: GPUBindGroup;
+
+    private compositePipeline: GPURenderPipeline;
+    private compositeBindGroup: GPUBindGroup;
+
+    constructor(deps: VolumetricPassDeps) {
+        const volWidth = Math.max(1, Math.floor(renderer.canvas.width / 2));
+        const volHeight = Math.max(1, Math.floor(renderer.canvas.height / 2));
+        this.volumetricTexture = renderer.device.createTexture({
+            label: "volumetric downsampled texture",
+            size: [volWidth, volHeight],
+            format: "rgba16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+        });
+        this.volumetricTextureView = this.volumetricTexture.createView();
+
+        // Generator pipeline
+        const genBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "volumetric lighting bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ]
+        });
+        this.generatorPipeline = renderer.device.createRenderPipeline({
+            label: "volumetric lighting pipeline",
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [genBindGroupLayout] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.volumetricLightingVertSrc }), entryPoint: "main" },
+            fragment: {
+                module: renderer.device.createShaderModule({ code: shaders.volumetricLightingFragSrc }),
+                entryPoint: "main",
+                targets: [{ format: "rgba16float" }]
+            }
+        });
+        this.generatorBindGroup = renderer.device.createBindGroup({
+            label: "volumetric lighting bind group",
+            layout: genBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: deps.cameraBuffer } },
+                { binding: 1, resource: deps.depthTextureView },
+                { binding: 2, resource: { buffer: deps.sunLightBuffer } },
+                { binding: 3, resource: deps.vsm.physicalAtlasView },
+                { binding: 4, resource: { buffer: deps.vsm.pageTableBuffer } },
+                { binding: 5, resource: { buffer: deps.vsm.vsmUniformBuffer } },
+            ]
+        });
+
+        // Composite pipeline (additive blend onto canvas)
+        const compBindGroupLayout = renderer.device.createBindGroupLayout({
+            label: "volumetric composite bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ]
+        });
+        this.compositePipeline = renderer.device.createRenderPipeline({
+            label: "volumetric composite pipeline",
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [compBindGroupLayout] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.volumetricLightingVertSrc }), entryPoint: "main" },
+            fragment: {
+                module: renderer.device.createShaderModule({ code: shaders.volumetricCompositeFragSrc }),
+                entryPoint: "main",
+                targets: [{
+                    format: renderer.canvasFormat,
+                    blend: {
+                        color: { operation: 'add', srcFactor: 'one', dstFactor: 'one' },
+                        alpha: { operation: 'add', srcFactor: 'zero', dstFactor: 'one' }
+                    }
+                }]
+            }
+        });
+        this.compositeBindGroup = renderer.device.createBindGroup({
+            label: "volumetric composite bind group",
+            layout: compBindGroupLayout,
+            entries: [
+                { binding: 0, resource: this.volumetricTextureView },
+                { binding: 1, resource: deps.depthTextureView },
+                { binding: 2, resource: { buffer: deps.cameraBuffer } },
+            ]
+        });
+    }
+
+    execute(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {
+        // Generate volumetric scattering at half resolution
+        const genPass = encoder.beginRenderPass({
+            label: "Volumetric Lighting Generator Pass",
+            colorAttachments: [{ view: this.volumetricTextureView, loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 0 }, storeOp: "store" }]
+        });
+        genPass.setPipeline(this.generatorPipeline);
+        genPass.setBindGroup(0, this.generatorBindGroup);
+        genPass.draw(3);
+        genPass.end();
+
+        // Composite onto canvas with additive blending
+        const compPass = encoder.beginRenderPass({
+            label: "Volumetric Composite Pass",
+            colorAttachments: [{ view: canvasTextureView, loadOp: "load", storeOp: "store" }]
+        });
+        compPass.setPipeline(this.compositePipeline);
+        compPass.setBindGroup(0, this.compositeBindGroup);
+        compPass.draw(3);
+        compPass.end();
+    }
+}
