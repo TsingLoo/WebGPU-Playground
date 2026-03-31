@@ -3,10 +3,10 @@ WebGPU Forward+ / Clustered Deferred Renderer
 
 ![](./img/chrome_Bm0daornYa.jpg)
 
-## [Live Demo](https://tsingloo.github.io/WebGPU-Project4-Forward-Plus-and-Clustered-Deferred/)
+## [Live Demo](https://tsingloo.github.io/WebGPU-Playground/)
 
 * **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 4**
-    
+  
     * Xiaonan Pan
       * [LinkedIn](https://www.linkedin.com/in/xiaonan-pan-9b0b0b1a7), [My Blog](www.tsingloo.com), [GitHub](https://github.com/TsingLoo)
     * Tested on: 
