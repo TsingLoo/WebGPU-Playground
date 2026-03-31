@@ -24,7 +24,8 @@ struct SurfaceData {
     alpha: f32,
     metallic: f32,
     roughness: f32,
-    N: vec3f, // Unmapped or Normal-mapped normal, depending on whether normal texture exists
+    N: vec3f,
+    shadingModelId: f32, // SHADING_MODEL_PBR, SHADING_MODEL_UNLIT, etc.
 }
 
 // Unified material property evaluation
@@ -68,6 +69,7 @@ fn evaluateMaterial(uv: vec2f, geometryNormal: vec3f, tangentWorld: vec4f) -> Su
         N = normalize(tbn * tangentNormal);
     }
     surf.N = N;
+    surf.shadingModelId = SHADING_MODEL_PBR;
 
     return surf;
 }

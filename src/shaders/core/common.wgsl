@@ -2,6 +2,11 @@
 
 const PI = 3.14159265359;
 
+// Shading Model IDs (stored in G-Buffer specular.a, normalized to [0,1])
+// Use f32 values compatible with rgba8unorm (0.0 = 0, 1/255 ≈ 0.004, etc.)
+const SHADING_MODEL_PBR: f32      = 0.0;   // Standard PBR Cook-Torrance
+const SHADING_MODEL_UNLIT: f32    = 1.0;   // Unlit / emissive only
+
 struct Light {
     pos: vec3f,
     color: vec3f

@@ -30,8 +30,8 @@ fn main(in: FragmentInput) ->  GBufferOutput
     output.normal = vec4f(surf.N, 1.0); 
     output.position = vec4f(in.pos, 1.0);
 
-    // Store PBR params: R=roughness, G=metallic, B=ao
-    output.specular_material = vec4f(surf.roughness, surf.metallic, ao, 1.0);
+    // Store PBR params: R=roughness, G=metallic, B=ao, A=shadingModelId
+    output.specular_material = vec4f(surf.roughness, surf.metallic, ao, surf.shadingModelId);
     
     return output;
 }

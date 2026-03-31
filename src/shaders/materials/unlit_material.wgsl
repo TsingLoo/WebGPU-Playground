@@ -28,6 +28,7 @@ struct SurfaceData {
     metallic: f32,
     roughness: f32,
     N: vec3f,
+    shadingModelId: f32,
 }
 
 // Unified material property evaluation
@@ -45,6 +46,7 @@ fn evaluateMaterial(uv: vec2f, geometryNormal: vec3f, tangentWorld: vec4f) -> Su
 
     // 3. No Normal Mapping
     surf.N = normalize(geometryNormal);
+    surf.shadingModelId = SHADING_MODEL_UNLIT;
 
     return surf;
 }
