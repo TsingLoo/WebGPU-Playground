@@ -3,21 +3,21 @@
 import commonRaw from './core/common.wgsl?raw';
 import standardMaterialRaw from './materials/standard_material.wgsl?raw';
 import unlitMaterialRaw from './materials/unlit_material.wgsl?raw';
-import giEvaluationRaw from './core/gi_evaluation.wgsl?raw';
+import giEvaluationRaw from './gi/gi_evaluation.wgsl?raw';
 
 import standardVertRaw from './core/standard.vs.wgsl?raw';
 
 import geometryFragRaw from './core/geometry.fs.wgsl?raw';
 
-import forwardPlusFragRaw from './forward_plus/forward_plus.fs.wgsl?raw';
+import forwardPlusFragRaw from './rendering_path/forward_plus/forward_plus.fs.wgsl?raw';
 
-import fullscreenBlitVertRaw from './core/fullscreen_blit.vs.wgsl?raw';
-import fullscreenBlitFragRaw from './core/fullscreen_blit.fs.wgsl?raw';
+import fullscreenBlitVertRaw from './core/blit/fullscreen_blit.vs.wgsl?raw';
+import fullscreenBlitFragRaw from './core/blit/fullscreen_blit.fs.wgsl?raw';
 
-import clusteredDeferredComputeSrcRaw from './clustered_deferred/clusteredDeferred.cs.wgsl?raw';
+import clusteredDeferredComputeSrcRaw from './rendering_path/clustered_deferred/clusteredDeferred.cs.wgsl?raw';
 
-import moveLightsComputeRaw from './forward_plus/move_lights.cs.wgsl?raw';
-import clusteringComputeRaw from './forward_plus/clustering.cs.wgsl?raw';
+import moveLightsComputeRaw from './core/clustering/move_lights.cs.wgsl?raw';
+import clusteringComputeRaw from './core/clustering/clustering.cs.wgsl?raw';
 
 import zPrepassFragRaw from './core/zPrepass.fs.wgsl?raw';
 import debugBoxRaw from './core/debug_box.wgsl?raw';
@@ -30,28 +30,28 @@ import brdfLutRaw from './ibl/brdf_lut.cs.wgsl?raw';
 import equirectangularToCubemapRaw from './ibl/equirectangular_to_cubemap.cs.wgsl?raw';
 
 // DDGI
-import ddgiProbeTraceRaw from './ddgi/ddgi_probe_trace.cs.wgsl?raw';
-import ddgiIrradianceUpdateRaw from './ddgi/ddgi_irradiance_update.cs.wgsl?raw';
-import ddgiVisibilityUpdateRaw from './ddgi/ddgi_visibility_update.cs.wgsl?raw';
-import ddgiBorderUpdateRaw from './ddgi/ddgi_border_update.cs.wgsl?raw';
+import ddgiProbeTraceRaw from './gi/ddgi/ddgi_probe_trace.cs.wgsl?raw';
+import ddgiIrradianceUpdateRaw from './gi/ddgi/ddgi_irradiance_update.cs.wgsl?raw';
+import ddgiVisibilityUpdateRaw from './gi/ddgi/ddgi_visibility_update.cs.wgsl?raw';
+import ddgiBorderUpdateRaw from './gi/ddgi/ddgi_border_update.cs.wgsl?raw';
 
 // Radiance Cascades
-import rcTraceRaw from './radiance_cascades/rc_trace.cs.wgsl?raw';
-import rcBorderRaw from './radiance_cascades/rc_border.cs.wgsl?raw';
+import rcTraceRaw from './gi/radiance_cascades/rc_trace.cs.wgsl?raw';
+import rcBorderRaw from './gi/radiance_cascades/rc_border.cs.wgsl?raw';
 
 // NRC shaders
-import nrcCommonRaw from './nrc/nrc_common.wgsl?raw';
-import nrcScatterTrainingRaw from './nrc/nrc_scatter_training.cs.wgsl?raw';
-import nrcTrainRaw from './nrc/nrc_train.cs.wgsl?raw';
-import nrcInferenceRaw from './nrc/nrc_inference.cs.wgsl?raw';
+import nrcCommonRaw from './gi/nrc/nrc_common.wgsl?raw';
+import nrcScatterTrainingRaw from './gi/nrc/nrc_scatter_training.cs.wgsl?raw';
+import nrcTrainRaw from './gi/nrc/nrc_train.cs.wgsl?raw';
+import nrcInferenceRaw from './gi/nrc/nrc_inference.cs.wgsl?raw';
 
 // Surfel shaders
-import surfelCommonRaw from './surfel/surfel_common.wgsl?raw';
-import bvhRaw from './surfel/bvh.wgsl?raw';
-import surfelLifecycleRaw from './surfel/surfel_lifecycle.cs.wgsl?raw';
-import surfelGridRaw from './surfel/surfel_grid.cs.wgsl?raw';
-import surfelIntegratorRaw from './surfel/surfel_integrator.cs.wgsl?raw';
-import surfelResolveRaw from './surfel/surfel_resolve.cs.wgsl?raw';
+import surfelCommonRaw from './gi/surfel/surfel_common.wgsl?raw';
+import bvhRaw from './gi/surfel/bvh.wgsl?raw';
+import surfelLifecycleRaw from './gi/surfel/surfel_lifecycle.cs.wgsl?raw';
+import surfelGridRaw from './gi/surfel/surfel_grid.cs.wgsl?raw';
+import surfelIntegratorRaw from './gi/surfel/surfel_integrator.cs.wgsl?raw';
+import surfelResolveRaw from './gi/surfel/surfel_resolve.cs.wgsl?raw';
 
 // Shadow shaders
 import shadowVertRaw from './shadows/shadow.vs.wgsl?raw';
