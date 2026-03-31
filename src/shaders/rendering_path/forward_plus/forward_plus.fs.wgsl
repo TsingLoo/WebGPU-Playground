@@ -83,23 +83,8 @@ fn main(in: FragmentInput) -> @location(0) vec4f
     let shadow = calculateShadowVSM(vsmPhysAtlas, vsmUniforms, sunLight, in.pos_world, N);
     Lo += calculateSunLightPBR(sunLight, in.pos_world, N, V, albedo, metallic, roughness, shadow);
 
-    // ---- IBL Ambient (split-sum approximation) ----
-    let F0 = mix(vec3f(0.04), albedo, metallic);
-    let NdotV = max(dot(N, V), 0.0);
-    let F = fresnelSchlickRoughness(NdotV, F0, roughness);
-
-    let kS = F;
-    let kD = (vec3f(1.0) - kS) * (1.0 - metallic);
-
-    // Diffuse IBL from preconvolved irradiance map
-    let iblIrradiance = textureSampleLevel(irradianceMap, iblSampler, N, 0.0).rgb;
-
-    // Specular IBL (split-sum)
-    let R = reflect(-V, N);
-    let maxLod = 4.0; // PREFILTER_MIP_LEVELS - 1
-    let prefilteredColor = textureSampleLevel(prefilteredMap, iblSampler, R, roughness * maxLod).rgb;
-    let brdf = textureSampleLevel(brdfLut, iblSampler, vec2f(NdotV, roughness), 0.0).rg;
-    let specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
+    // ---- IBL Ambient (shared split-sum) ----
+    let ibl = computeIBL(N, V, albedo, metallic, roughness);
 
     // Build ambient: scale IBL independently from DDGI/RC
     var diffuseAmbient = vec3f(0.0);
@@ -128,7 +113,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         let nrcIrradiance = evaluateNRC(screenUV, nrcInferenceTex);
         // NRC provides cached irradiance; apply albedo modulation
         let nrcBounce = nrcIrradiance * albedo;
-        let iblFloor2 = iblIrradiance * albedo * 0.15;
+        let iblFloor2 = ibl.iblIrradiance * albedo * 0.15;
         diffuseAmbient = max(nrcBounce, iblFloor2);
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
@@ -148,10 +133,8 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         diffuseAmbient = surfelBounce; // Completely replace IBL ambient to clearly see the real GI
     } else {
         // No DDGI/NRC/Surfel: use IBL irradiance with moderate scaling
-        diffuseAmbient = iblIrradiance * albedo * 1.0;
+        diffuseAmbient = ibl.iblIrradiance * albedo * 1.0;
     }
-
-    // DDGI debug visualization removed since Radiance Cascades do not require it
 
     // ---- NRC Debug Visualization ----
     if (nrcParams.scene_min.w > 0.5) {
@@ -175,26 +158,15 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         }
     }
 
-    // Combine: diffuse ambient + specular IBL
-    // Distant reflection usually doesn't match interior lighting, scale it down if GI is active
+    // Composite and tone map (shared)
     let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
-    let specIBLScale = select(0.6, 0.0, isGIActive);
-    let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
+    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, isGIActive);
 
-    let finalColor = ambient + Lo;
-
-    // Detect NaN: x != x is true if x is NaN
-    if (finalColor.x != finalColor.x || finalColor.y != finalColor.y || finalColor.z != finalColor.z) {
+    // Detect NaN
+    if (corrected.x != corrected.x || corrected.y != corrected.y || corrected.z != corrected.z) {
         return vec4f(1.0, 0.0, 0.0, 1.0);
     }
-    if (ambient.x != ambient.x || ambient.y != ambient.y || ambient.z != ambient.z) {
-        return vec4f(1.0, 1.0, 0.0, 1.0); // Yellow if ambient alone is NaN
-    }
-
-    // Tone mapping (Reinhard)
-    let mapped = finalColor / (finalColor + vec3f(1.0));
-    // Gamma correction
-    let corrected = pow(mapped, vec3f(1.0/2.2));
 
     return vec4f(corrected, 1.0);
 }
+
