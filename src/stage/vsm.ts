@@ -437,7 +437,7 @@ export class VSM {
     update(
         encoder: GPUCommandEncoder,
         depthTextureView: GPUTextureView,
-        scene: import('./scene').Scene,
+        scene: import('../engine/Scene').Scene,
         cameraPos: [number, number, number],
     ) {
         this.updateUniforms(cameraPos);
@@ -502,7 +502,7 @@ export class VSM {
      * Each level renders the entire scene with its VP matrix into the full atlas.
      * The hardware depth test ensures only closest geometry is kept per texel.
      */
-    private renderShadowLevels(encoder: GPUCommandEncoder, scene: import('./scene').Scene) {
+    private renderShadowLevels(encoder: GPUCommandEncoder, scene: import('../engine/Scene').Scene) {
         // Single pass rendering of all clipmap levels into the atlas
         // We render each level separately so the VP matrix is correct
         const shadowPass = encoder.beginRenderPass({
@@ -541,7 +541,7 @@ export class VSM {
             shadowPass.setScissorRect(xOffset, yOffset, tileSize, tileSize);
 
             scene.iterate(
-                node => { shadowPass.setBindGroup(1, node.modelBindGroup); },
+                mr => { shadowPass.setBindGroup(1, mr.modelBindGroup!); },
                 material => { shadowPass.setBindGroup(2, material.materialBindGroup); },
                 primitive => {
                     shadowPass.setVertexBuffer(0, primitive.vertexBuffer);

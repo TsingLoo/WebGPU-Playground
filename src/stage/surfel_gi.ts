@@ -1,7 +1,7 @@
 import { device } from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
-import { Scene } from './scene';
+import { Scene } from '../engine/Scene';
 
 export class SurfelGI {
     enabled = false; // Disabled by default to avoid conflict with DDGI

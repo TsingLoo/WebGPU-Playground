@@ -1,4 +1,4 @@
-import { Scene } from './stage/scene';
+import { Scene } from './engine/Scene';
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
 import { Stage } from './stage/stage';
@@ -163,6 +163,9 @@ export abstract class Renderer {
         let deltaTime = time - this.prevTime;
         this.camera.onFrame(deltaTime);
         this.lights.onFrame(time);
+
+        // Update scene: recompute transforms → upload MeshRenderer GPU buffers
+        this.scene.update(deltaTime);
 
         this.stats.begin();
 
