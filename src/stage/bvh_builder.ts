@@ -1,6 +1,7 @@
 import { BufferAttribute, BufferGeometry } from 'three';
 import { MeshBVH, MeshBVHOptions } from 'three-mesh-bvh';
-import { Node } from './scene';
+import { Entity } from '../engine/Entity';
+import { MeshRenderer } from '../engine/components/MeshRenderer';
 import { device } from '../renderer';
 
 export class BVHData {
@@ -11,7 +12,7 @@ export class BVHData {
     triangleCount: number = 0;
 }
 
-export function buildBVHFromScene(sceneRoot: Node): BVHData {
+export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     console.log("Building BVH on CPU...");
     
     // 1. Gather all triangles into flat arrays
@@ -22,8 +23,9 @@ export function buildBVHFromScene(sceneRoot: Node): BVHData {
     let nodes = [sceneRoot];
     while (nodes.length > 0) {
         let node = nodes.pop()!;
-        if (node.mesh) {
-            for (let prim of node.mesh.primitives) {
+        const mr = node.getComponent(MeshRenderer);
+        if (mr && mr.mesh) {
+            for (let prim of mr.mesh.primitives) {
                 if (prim.cpuPositions && prim.cpuIndices) {
                     totalTris += prim.numIndices / 3;
                     totalVerts += prim.cpuPositions.length / 3;
@@ -45,13 +47,14 @@ export function buildBVHFromScene(sceneRoot: Node): BVHData {
     nodes = [sceneRoot];
     while (nodes.length > 0) {
         let node = nodes.pop()!;
-        if (node.mesh) {
-            for (let prim of node.mesh.primitives) {
+        const mr = node.getComponent(MeshRenderer);
+        if (mr && mr.mesh) {
+            for (let prim of mr.mesh.primitives) {
                 if (!prim.cpuPositions || !prim.cpuIndices) continue;
                 
                 const pos = prim.cpuPositions;
                 const ind = prim.cpuIndices;
-                const mat = node.transform;
+                const mat = node.worldTransform;
                 const materialId = prim.material.id;
                 
                 // const numVerts = positionAttribute.count;

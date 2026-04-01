@@ -117,8 +117,8 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
         
         let currentPipeline: GPURenderPipeline | null = null;
         
-        this.scene.iterate(node => {
-            shadingRenderPass.setBindGroup(1, node.modelBindGroup);
+        this.scene.iterate(mr => {
+            shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
         }, material => {
             const pipeline = this.getOrCreateShadingPipeline(material.type, true);
             if (currentPipeline !== pipeline) {
@@ -134,8 +134,8 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
 
         // Alpha-cutout queue
         currentPipeline = null;
-        this.scene.iterate(node => {
-            shadingRenderPass.setBindGroup(1, node.modelBindGroup);
+        this.scene.iterate(mr => {
+            shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
         }, material => {
             const pipeline = this.getOrCreateShadingPipeline(material.type, false);
             if (currentPipeline !== pipeline) {

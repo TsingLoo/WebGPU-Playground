@@ -4,7 +4,7 @@ import { RadianceCascades } from "./radiance_cascades";
 import { DDGI } from "./ddgi";
 import { Environment } from "./environment";
 import { Lights } from "./lights";
-import { Scene } from "./scene";
+import { Scene } from "../engine/Scene";
 import { VSM } from "./vsm";
 import { SSAO } from "./ssao";
 

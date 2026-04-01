@@ -8,9 +8,11 @@ In particular, it is known to not work if there is a mesh with no material.
 import { registerLoaders, load, parse } from '@loaders.gl/core';
 import { GLTFLoader, GLTFWithBuffers, GLTFMesh, GLTFMeshPrimitive, GLTFMaterial, GLTFSampler } from '@loaders.gl/gltf';
 import { ImageLoader } from '@loaders.gl/images';
-import { Mat4, mat4 } from 'wgpu-matrix';
-import { BVHData } from './bvh_builder';
-import { device, materialBindGroupLayout, modelBindGroupLayout } from '../renderer';
+import { mat4 } from 'wgpu-matrix';
+import { BVHData, buildBVHFromScene } from '../stage/bvh_builder';
+import { Entity } from './Entity';
+import { MeshRenderer } from './components/MeshRenderer';
+import { device, materialBindGroupLayout } from '../renderer';
 
 export function setupLoaders() {
     registerLoaders([GLTFLoader, ImageLoader]);
@@ -53,7 +55,7 @@ function getFloatArray(gltfWithBuffers: GLTFWithBuffers, attribute: number) {
     }
 }
 
-class Texture {
+export class Texture {
     image: GPUTexture;
     sampler: GPUSampler;
 
@@ -265,61 +267,6 @@ export class Mesh {
     }
 }
 
-export class Node {
-    name: String = "node";
-
-    parent: Node | undefined;
-    children: Set<Node> = new Set<Node>();
-
-    transform: Mat4 = mat4.identity();
-    modelMatUniformBuffer!: GPUBuffer;
-    modelBindGroup!: GPUBindGroup;
-    mesh: Mesh | undefined;
-
-    setName(newName: string) {
-        this.name = newName;
-    }
-
-    setParent(newParent: Node) {
-        if (this.parent != undefined) {
-            this.parent.children.delete(this);
-        }
-
-        this.parent = newParent;
-        newParent.children.add(this);
-    }
-
-    propagateTransformations() {
-        if (this.parent != undefined) {
-            this.transform = mat4.mul(this.parent.transform, this.transform);
-        }
-
-        if (this.mesh != undefined) {
-            this.modelMatUniformBuffer = device.createBuffer({
-                label: "model mat uniform",
-                size: 16 * 4,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            });
-
-            device.queue.writeBuffer(this.modelMatUniformBuffer as GPUBuffer, 0, this.transform as any);
-
-            this.modelBindGroup = device.createBindGroup({
-                label: "model bind group",
-                layout: modelBindGroupLayout,
-                entries: [
-                    {
-                        binding: 0,
-                        resource: { buffer: this.modelMatUniformBuffer }
-                    }
-                ]
-            });
-        }
-
-        for (let child of this.children) {
-            child.propagateTransformations();
-        }
-    }
-}
 
 function createTextureSRGB(imageBitmap: ImageBitmap): GPUTexture {
     let texture = device.createTexture({
@@ -411,35 +358,41 @@ function createSampler(gltfSampler: GLTFSampler): GPUSampler {
     return device.createSampler(samplerDescriptor);
 }
 
-export class Scene {
-    private root: Node = new Node();
+
+export class GLTFLoaderParams {
+    public voxelGridSize = 128;
+    public voxelBoundsMin = [-15, 0, -10];
+    public voxelBoundsMax = [15, 15, 10];
+}
+
+export class GLTFResult {
+    public rootEntity: Entity;
+    public bvhData: BVHData;
+    public voxelGrid: GPUTexture;
+    public voxelGridView: GPUTextureView;
+    public globalMaterialBuffer: GPUBuffer;
     
-    // Coarse Scene Voxel Grid for Ray Tracing
-    public voxelGrid!: GPUTexture;
-    public voxelGridView!: GPUTextureView;
-    public readonly voxelGridSize = 128; // 128x128x128
-    public readonly voxelBoundsMin = [-15, 0, -10];
-    public readonly voxelBoundsMax = [15, 15, 10];
-    
-    // BVH for Surfel GI & DDGI Ray Tracing
-    public bvhData!: BVHData;
-    public globalMaterialBuffer!: GPUBuffer;
-
-    constructor() {
-        this.root.setName("root");
+    constructor(root: Entity, bvh: BVHData, voxelGrid: GPUTexture, voxelGridView: GPUTextureView, globalMatBuf: GPUBuffer) {
+        this.rootEntity = root;
+        this.bvhData = bvh;
+        this.voxelGrid = voxelGrid;
+        this.voxelGridView = voxelGridView;
+        this.globalMaterialBuffer = globalMatBuf;
     }
+}
 
-    async loadGltfBuffer(buffer: ArrayBuffer) {
-        const gltfWithBuffers = await parse(buffer, GLTFLoader) as unknown as GLTFWithBuffers;
-        return this.processGltf(gltfWithBuffers);
-    }
+export async function loadGltfBuffer(buffer: ArrayBuffer, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+    const gltfWithBuffers = await parse(buffer, GLTFLoader) as unknown as GLTFWithBuffers;
+    return processGltf(gltfWithBuffers, params);
+}
 
-    async loadGltf(filePath: string) {
-        const gltfWithBuffers = await load(filePath) as GLTFWithBuffers;
-        return this.processGltf(gltfWithBuffers);
-    }
+export async function loadGltf(filePath: string, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+    const gltfWithBuffers = await load(filePath) as GLTFWithBuffers;
+    return processGltf(gltfWithBuffers, params);
+}
 
-    private processGltf(gltfWithBuffers: GLTFWithBuffers) {
+function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult {
+
         const gltf = gltfWithBuffers.json;
 
         // Create default white 1x1 textures (sRGB for baseColor, linear for MR)
@@ -532,53 +485,57 @@ export class Scene {
             }
         }
 
-        this.globalMaterialBuffer = device.createBuffer({
+        const globalMaterialBuffer = device.createBuffer({
             label: "Global Material Buffer",
             size: materialDataArray.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        device.queue.writeBuffer(this.globalMaterialBuffer, 0, materialDataArray as any);
+        device.queue.writeBuffer(globalMaterialBuffer, 0, materialDataArray as any);
 
         let sceneMeshes: Mesh[] = [];
         for (let gltfMesh of gltf.meshes!) {
             sceneMeshes.push(new Mesh(gltfMesh, gltfWithBuffers, sceneMaterials));
         }
 
-        let sceneRoot: Node = new Node();
-        sceneRoot.setName("scene root");
-        sceneRoot.setParent(this.root);
+        let sceneRoot: Entity = new Entity();
+        sceneRoot.name = "scene root";
+        // sceneRoot.setParent(this.root);
 
-        let sceneNodes: Node[] = [];
+        let sceneNodes: Entity[] = [];
         for (let gltfNode of gltf.nodes!) {
-            let newNode = new Node();
-            newNode.setName(gltfNode.name);
+            let newNode = new Entity();
+            if (gltfNode.name) newNode.name = gltfNode.name;
             newNode.setParent(sceneRoot);
 
+            
             if (gltfNode.mesh != undefined) {
-                newNode.mesh = sceneMeshes[gltfNode.mesh];
+                const mr = new MeshRenderer();
+                mr.setMesh(sceneMeshes[gltfNode.mesh]);
+                newNode.addComponent(mr);
             }
 
+
             if (gltfNode.matrix != undefined) {
-                newNode.transform = new Float32Array(gltfNode.matrix);
+                newNode.localTransform = new Float32Array(gltfNode.matrix);
             } else {
                 if (gltfNode.translation != undefined) {
-                    newNode.transform = mat4.mul(newNode.transform, mat4.translation(gltfNode.translation));
+                    newNode.localTransform = mat4.mul(newNode.localTransform, mat4.translation(gltfNode.translation));
                 }
 
                 if (gltfNode.rotation != undefined) {
-                    newNode.transform = mat4.mul(newNode.transform, mat4.fromQuat(gltfNode.rotation));
+                    newNode.localTransform = mat4.mul(newNode.localTransform, mat4.fromQuat(gltfNode.rotation));
                 }
 
                 if (gltfNode.scale != undefined) {
-                    newNode.transform = mat4.mul(newNode.transform, mat4.scaling(gltfNode.scale));
+                    newNode.localTransform = mat4.mul(newNode.localTransform, mat4.scaling(gltfNode.scale));
                 }
             }
 
             sceneNodes.push(newNode);
         }
 
-        for (let nodeIdx in gltf.nodes!) {
-            const gltfNode = gltf.nodes[nodeIdx];
+        for (let nodeIdx = 0; nodeIdx < gltf.nodes!.length; nodeIdx++) {
+            const gltfNode = gltf.nodes![nodeIdx];
 
             if (gltfNode.children == undefined) {
                 continue;
@@ -589,34 +546,39 @@ export class Scene {
             }
         }
 
-        sceneRoot.propagateTransformations();
+        sceneRoot.updateWorldTransform();
         
-        // [LEGACY] BVH and voxel building moved to engine/GLTFLoader.ts
-        // this.bvhData = buildBVHFromScene(this.root);
-        // this.buildVoxelGrid();
-    }
-    
-    // @ts-ignore — Legacy dead code, kept for reference
-    private _buildVoxelGrid() {
-        const size = this.voxelGridSize;
+        // Phase 1.5: Build BVH for Surfel GI
+        const bvhData = buildBVHFromScene(sceneRoot);
+        
+        // Phase 2: Build World-Space Voxel Grid on CPU for Coarse Scene Tracing!
+        const { voxelGrid, voxelGridView } = buildVoxelGrid(sceneRoot, params);
+        
+        return new GLTFResult(sceneRoot, bvhData, voxelGrid, voxelGridView, globalMaterialBuffer);
+}
+
+function buildVoxelGrid(rootEntity: Entity, params: GLTFLoaderParams): {voxelGrid: GPUTexture, voxelGridView: GPUTextureView} {
+        const size = params.voxelGridSize;
         const totalVoxels = size * size * size;
         const voxelData = new Uint8Array(totalVoxels * 4); // RGBA8Unorm
         voxelData.fill(0);
         
-        const minX = this.voxelBoundsMin[0], minY = this.voxelBoundsMin[1], minZ = this.voxelBoundsMin[2];
-        const maxX = this.voxelBoundsMax[0], maxY = this.voxelBoundsMax[1], maxZ = this.voxelBoundsMax[2];
+        const minX = params.voxelBoundsMin[0], minY = params.voxelBoundsMin[1], minZ = params.voxelBoundsMin[2];
+        const maxX = params.voxelBoundsMax[0], maxY = params.voxelBoundsMax[1], maxZ = params.voxelBoundsMax[2];
         
         console.log(`Building Voxel Grid (${size}^3) on CPU...`);
-        let nodes = [this.root];
+        let nodes = [rootEntity];
         while (nodes.length > 0) {
             let node = nodes.pop()!;
-            if (node.mesh) {
-                for (let prim of node.mesh.primitives) {
+            const mr = node.getComponent(MeshRenderer);
+            if (mr && mr.mesh) {
+                const mesh = mr.mesh;
+                for (let prim of mesh.primitives) {
                     if (!prim.cpuPositions || !prim.cpuIndices) continue;
                     
                     const pos = prim.cpuPositions;
                     const ind = prim.cpuIndices;
-                    const mat = node.transform;
+                    const mat = node.worldTransform;
                     
                     for (let i = 0; i < prim.numIndices; i += 3) {
                         const i0 = ind[i] * 3, i1 = ind[i+1] * 3, i2 = ind[i+2] * 3;
@@ -695,7 +657,7 @@ export class Scene {
         
         console.log("CPU Voxelization Complete.");
         
-        this.voxelGrid = device.createTexture({
+        const voxelGrid = device.createTexture({
             label: "World Space Voxel Grid",
             size: [size, size, size],
             format: 'rgba8unorm',
@@ -704,41 +666,13 @@ export class Scene {
         });
         
         device.queue.writeTexture(
-            { texture: this.voxelGrid },
+            { texture: voxelGrid },
             voxelData,
             { bytesPerRow: size * 4, rowsPerImage: size },
             [size, size, size]
         );
         
-        this.voxelGridView = this.voxelGrid.createView({ dimension: '3d' });
+        const voxelGridView = voxelGrid.createView({ dimension: '3d' });
+        return { voxelGrid, voxelGridView };
     }
 
-    iterate(nodeFunction: (node: Node) => void, materialFunction: (material: Material) => void,
-        primFunction: (primitive: Primitive) => void, opaqueFilter: boolean | null = null) {
-        let nodes = [this.root];
-
-        let lastMaterialId: number | undefined = undefined;
-
-        while (nodes.length > 0) {
-            let node = nodes.pop() as Node;
-            if (node.mesh != undefined) {
-                nodeFunction(node);
-
-                for (let primitive of node.mesh.primitives) {
-                    if (opaqueFilter !== null && primitive.material.isOpaque !== opaqueFilter) continue;
-
-                    if (primitive.material.id != lastMaterialId) {
-                        materialFunction(primitive.material);
-                        lastMaterialId = primitive.material.id;
-                    }
-
-                    primFunction(primitive);
-                }
-            }
-
-            for (let childNode of node.children) {
-                nodes.push(childNode);
-            }
-        }
-    }
-}

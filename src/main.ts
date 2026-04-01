@@ -13,7 +13,8 @@ import parseHdr from 'parse-hdr';
 // @ts-ignore
 import parseExr from 'parse-exr';
 
-import { setupLoaders, Scene } from './stage/scene';
+import { Scene } from './engine/Scene';
+import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
 import { Stage } from './stage/stage';
@@ -27,7 +28,13 @@ await initWebGPU();
 setupLoaders();
 
 let scene = new Scene();
-await scene.loadGltf('./scenes/sponza/Sponza.gltf');
+const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf');
+scene.root.addChild(gltfResult.rootEntity);
+scene.bvhData = gltfResult.bvhData;
+scene.voxelGrid = gltfResult.voxelGrid;
+scene.voxelGridView = gltfResult.voxelGridView;
+scene.globalMaterialBuffer = gltfResult.globalMaterialBuffer;
+scene.root.updateWorldTransform();
 
 const camera = new Camera();
 const lights = new Lights(camera);
@@ -435,7 +442,13 @@ modelFileInput.addEventListener('change', async (event) => {
         const buffer = await file.arrayBuffer();
 
         const newScene = new Scene();
-        await newScene.loadGltfBuffer(buffer);
+        const result = await loadGltfBuffer(buffer);
+        newScene.root.addChild(result.rootEntity);
+        newScene.bvhData = result.bvhData;
+        newScene.voxelGrid = result.voxelGrid;
+        newScene.voxelGridView = result.voxelGridView;
+        newScene.globalMaterialBuffer = result.globalMaterialBuffer;
+        newScene.root.updateWorldTransform();
         stage.scene = newScene;
 
         // Disable random point lights (designed for Sponza) to avoid color artifacts

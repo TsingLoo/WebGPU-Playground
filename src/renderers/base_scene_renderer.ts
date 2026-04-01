@@ -212,7 +212,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // Opaque queue
         let currentPipeline: GPURenderPipeline | null = null;
-        this.scene.iterate(node => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); },
+        this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
                            material => {
                                const pipeline = this.getOrCreateZPrepassPipeline(material.type, true);
                                if (currentPipeline !== pipeline) {
@@ -229,7 +229,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // Alpha-cutout queue
         currentPipeline = null;
-        this.scene.iterate(node => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); },
+        this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
                            material => {
                                const pipeline = this.getOrCreateZPrepassPipeline(material.type, false);
                                if (currentPipeline !== pipeline) {
@@ -263,7 +263,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // Opaque queue
         let currentGeometryPipeline: GPURenderPipeline | null = null;
-        this.scene.iterate(node => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); },
+        this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
                            material => {
                                const pipeline = this.getOrCreateGeometryPipeline(material.type, true);
                                if (currentGeometryPipeline !== pipeline) {
@@ -280,7 +280,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // Alpha-cutout queue
         currentGeometryPipeline = null;
-        this.scene.iterate(node => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, node.modelBindGroup); },
+        this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
                            material => {
                                const pipeline = this.getOrCreateGeometryPipeline(material.type, false);
                                if (currentGeometryPipeline !== pipeline) {
