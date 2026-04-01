@@ -518,21 +518,25 @@ vsmFolder.add(vsmProxy, 'physAtlasSize', [1024, 2048, 4096, 8192]).name('Atlas S
     stage.vsm.physAtlasSize = v;
     stage.vsm.recreate();
     stage.updateSunLight();
+    setRenderer(renderModeController.getValue());
 });
 vsmFolder.add(vsmProxy, 'pageSize', [64, 128, 256]).name('Page Size').onChange((v: number) => {
     stage.vsm.pageSize = v;
     stage.vsm.recreate();
     stage.updateSunLight();
+    setRenderer(renderModeController.getValue());
 });
 vsmFolder.add(vsmProxy, 'numClipmapLevels', 1, 8).step(1).name('Clipmap Levels').onChange((v: number) => {
     stage.vsm.numClipmapLevels = v;
     stage.vsm.recreate();
     stage.updateSunLight();
+    setRenderer(renderModeController.getValue());
 });
 vsmFolder.add(vsmProxy, 'pagesPerLevelAxis', [32, 64, 128, 256]).name('Pages/Level Axis').onChange((v: number) => {
     stage.vsm.pagesPerLevelAxis = v;
     stage.vsm.recreate();
     stage.updateSunLight();
+    setRenderer(renderModeController.getValue());
 });
 vsmFolder.add(vsmProxy, 'virtualSize').name('Virtual Size (px)').listen();
 vsmFolder.add(vsmProxy, 'maxPhysPages').name('Max Phys Pages').listen();
