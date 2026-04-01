@@ -217,7 +217,7 @@ fn calculateSunLightPBR(
 // Virtual Shadow Map (VSM)
 // ============================
 struct VSMUniforms {
-    clipmap_vp: array<mat4x4f, 6>,   // VP matrix per clipmap level
+    clipmap_vp: array<mat4x4f, 8>,   // VP matrix per clipmap level (max 8)
     inv_view_proj: mat4x4f,          // camera inverse view-projection (for mark pass)
     clipmap_count: u32,
     pages_per_axis: u32,             // 128

@@ -54,8 +54,8 @@ export class VSM {
     allocStateBuffer!: GPUBuffer;
 
     // VSM uniform buffer: clipmap VP matrices + params
-    // Layout: 6 × mat4x4f (384 bytes) + 4 × u32 params (16 bytes) + mat4x4f inv_view_proj (64 bytes) = 464 bytes
-    // Padded to 480 for alignment
+    // Layout: 8 × mat4x4f (512 bytes) + mat4x4f inv_view_proj (64 bytes) + 4 × u32 params (16 bytes) = 592 bytes
+    static readonly MAX_CLIPMAP_LEVELS = 8;
     vsmUniformBuffer!: GPUBuffer;
 
     // Light VP buffer per clipmap level (for shadow rendering)
@@ -92,17 +92,29 @@ export class VSM {
      * Call this after modifying pageSize, physAtlasSize, numClipmapLevels, or pagesPerLevelAxis.
      */
     recreate() {
-        // Destroy old resources
-        this.physicalAtlas.destroy();
-        this.pageTableBuffer.destroy();
-        this.pageRequestBuffer.destroy();
-        this.allocStateBuffer.destroy();
-        this.vsmUniformBuffer.destroy();
-        for (const buf of this.clipmapVPBuffers) buf.destroy();
+        // Capture old resources — they may still be referenced by in-flight GPU commands
+        const oldAtlas = this.physicalAtlas;
+        const oldPageTable = this.pageTableBuffer;
+        const oldPageRequest = this.pageRequestBuffer;
+        const oldAllocState = this.allocStateBuffer;
+        const oldUniforms = this.vsmUniformBuffer;
+        const oldVPBuffers = this.clipmapVPBuffers;
 
+        // Create new resources immediately
         this.createGPUResources();
         this.createComputePipelines();
         this.createShadowPipeline();
+
+        // Defer destruction of old resources until the GPU finishes processing
+        // any previously submitted commands that may still reference them
+        device.queue.onSubmittedWorkDone().then(() => {
+            oldAtlas.destroy();
+            oldPageTable.destroy();
+            oldPageRequest.destroy();
+            oldAllocState.destroy();
+            oldUniforms.destroy();
+            for (const buf of oldVPBuffers) buf.destroy();
+        });
     }
 
     private createGPUResources() {
@@ -144,11 +156,11 @@ export class VSM {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // VMS uniform buffer
-        // 6 mat4x4f (6*64=384) + inv_view_proj mat4x4f (64) + 4 u32 params (16) = 464 → pad to 480
+        // VSM uniform buffer
+        // 8 mat4x4f (8*64=512) + inv_view_proj mat4x4f (64) + 4 u32 params (16) = 592
         this.vsmUniformBuffer = device.createBuffer({
             label: "VSM Uniforms",
-            size: 480,
+            size: 592,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -386,28 +398,30 @@ export class VSM {
         const viewProjMat = new Float32Array(this.camera.uniforms.buffer, 0, 16);
         const invViewProj = this.invertMatrix4(viewProjMat);
 
-        // Buffer layout:
-        //   0..383:  6 × mat4x4f clipmap_vp (6*64 = 384 bytes)
-        //   384..447: mat4x4f inv_view_proj (64 bytes)
-        //   448..463: 4 × u32 params (16 bytes)
-        //   total = 464, padded to 480
-        const data = new ArrayBuffer(480);
+        // Buffer layout (must match WGSL VSMUniforms with array<mat4x4f, 8>):
+        //   0..511:   8 × mat4x4f clipmap_vp (8*64 = 512 bytes, 128 floats)
+        //   512..575:  mat4x4f inv_view_proj (64 bytes, 16 floats)
+        //   576..591:  4 × u32 params (16 bytes, 4 ints)
+        //   total = 592 bytes
+        const data = new ArrayBuffer(592);
         const f32 = new Float32Array(data);
         const u32 = new Uint32Array(data);
 
-        // Clipmap VP matrices
+        // Clipmap VP matrices (slots 0..MAX_CLIPMAP_LEVELS-1, unused ones stay zero)
         for (let i = 0; i < this.numClipmapLevels; i++) {
             f32.set(vpMatrices[i], i * 16);
         }
 
-        // Inverse view-projection
-        f32.set(invViewProj, 96); // offset 96 floats = 384 bytes
+        // Inverse view-projection at float offset 128 (= 8 * 16)
+        const vpOffset = VSM.MAX_CLIPMAP_LEVELS * 16; // 128
+        f32.set(invViewProj, vpOffset);
 
-        // Params at offset 112 floats = 448 bytes
-        u32[112] = this.numClipmapLevels;
-        u32[113] = this.pagesPerLevelAxis;
-        u32[114] = this.physAtlasSize;
-        u32[115] = this.physPagesPerAxis;
+        // Params at float offset 144 (= 128 + 16)
+        const paramsOffset = vpOffset + 16; // 144
+        u32[paramsOffset + 0] = this.numClipmapLevels;
+        u32[paramsOffset + 1] = this.pagesPerLevelAxis;
+        u32[paramsOffset + 2] = this.physAtlasSize;
+        u32[paramsOffset + 3] = this.physPagesPerAxis;
 
         device.queue.writeBuffer(this.vsmUniformBuffer, 0, data);
 
