@@ -8,6 +8,8 @@ import { BVHData } from './bvh_builder';
  * DDGI (Dynamic Diffuse Global Illumination) manager.
  * Manages probe grid, atlas textures, and compute pipelines for
  * screen-space probe-based irradiance and visibility updates.
+ *
+ * GPU resources are lazily allocated on first enable to save memory.
  */
 export class DDGI {
     // Grid configuration
@@ -42,42 +44,47 @@ export class DDGI {
     enabled = false;
     debugMode = 0; // 0=off, 1=irradiance, 2=visibility
 
-    // GPU resources
-    irradianceAtlasA: GPUTexture;
-    irradianceAtlasB: GPUTexture;
-    visibilityAtlasA: GPUTexture;
-    visibilityAtlasB: GPUTexture;
+    // GPU resources (lazily allocated)
+    private _initialized = false;
 
-    irradianceAtlasAView: GPUTextureView;
-    irradianceAtlasBView: GPUTextureView;
-    visibilityAtlasAView: GPUTextureView;
-    visibilityAtlasBView: GPUTextureView;
+    irradianceAtlasA!: GPUTexture;
+    irradianceAtlasB!: GPUTexture;
+    visibilityAtlasA!: GPUTexture;
+    visibilityAtlasB!: GPUTexture;
+
+    irradianceAtlasAView!: GPUTextureView;
+    irradianceAtlasBView!: GPUTextureView;
+    visibilityAtlasAView!: GPUTextureView;
+    visibilityAtlasBView!: GPUTextureView;
 
     // Current read/write targets (ping-pong)
     private pingPong = 0;
 
-    rayDataBuffer: GPUBuffer;
+    rayDataBuffer!: GPUBuffer;
     ddgiUniformBuffer: GPUBuffer;
-    randomRotationBuffer: GPUBuffer;
+    randomRotationBuffer!: GPUBuffer;
 
     ddgiSampler: GPUSampler;
 
-    // Pipelines
-    probeTracePipeline: GPUComputePipeline;
-    irradianceUpdatePipeline: GPUComputePipeline;
-    visibilityUpdatePipeline: GPUComputePipeline;
-    borderUpdateIrrPipeline: GPUComputePipeline;
-    borderUpdateVisPipeline: GPUComputePipeline;
+    // Pipelines (lazily created)
+    probeTracePipeline!: GPUComputePipeline;
+    irradianceUpdatePipeline!: GPUComputePipeline;
+    visibilityUpdatePipeline!: GPUComputePipeline;
+    borderUpdateIrrPipeline!: GPUComputePipeline;
+    borderUpdateVisPipeline!: GPUComputePipeline;
 
-    // Bind group layouts
-    probeTraceLayout: GPUBindGroupLayout;
-    irradianceUpdateLayout: GPUBindGroupLayout;
-    visibilityUpdateLayout: GPUBindGroupLayout;
-    borderUpdateLayout: GPUBindGroupLayout;
+    // Bind group layouts (lazily created)
+    probeTraceLayout!: GPUBindGroupLayout;
+    irradianceUpdateLayout!: GPUBindGroupLayout;
+    visibilityUpdateLayout!: GPUBindGroupLayout;
+    borderUpdateLayout!: GPUBindGroupLayout;
 
-    // Border params
-    borderIrrParamsBuffer: GPUBuffer;
-    borderVisParamsBuffer: GPUBuffer;
+    // Border params (lazily created)
+    borderIrrParamsBuffer!: GPUBuffer;
+    borderVisParamsBuffer!: GPUBuffer;
+
+    // Dummy resources for bind group compatibility when not initialized
+    private dummyTextureView: GPUTextureView;
 
     private camera: Camera;
     private environment: Environment;
@@ -85,6 +92,45 @@ export class DDGI {
     constructor(camera: Camera, environment: Environment) {
         this.camera = camera;
         this.environment = environment;
+
+        // Create minimal dummy resources for bind group compatibility
+        const dummyTex = device.createTexture({
+            label: "DDGI Dummy Texture",
+            size: [1, 1],
+            format: 'rgba16float',
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.dummyTextureView = dummyTex.createView();
+
+        // Uniform buffer is always needed (shader reads ddgi_enabled flag)
+        this.ddgiUniformBuffer = device.createBuffer({
+            label: "DDGI Uniforms",
+            size: 128,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        // Sampler is always needed for bind groups
+        this.ddgiSampler = device.createSampler({
+            label: "DDGI Atlas Sampler",
+            magFilter: 'linear',
+            minFilter: 'linear',
+            addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+        });
+
+        this.updateUniforms();
+
+        console.log(`DDGI configured: ${DDGI.GRID_X}x${DDGI.GRID_Y}x${DDGI.GRID_Z} = ${DDGI.TOTAL_PROBES} probes (resources deferred)`);
+    }
+
+    /**
+     * Lazily allocate all heavy GPU resources on first enable.
+     */
+    private ensureResources() {
+        if (this._initialized) return;
+        this._initialized = true;
+
+        console.log(`DDGI: allocating GPU resources...`);
 
         // Create irradiance atlas textures (ping-pong pair)
         const irrAtlasDesc: GPUTextureDescriptor = {
@@ -118,27 +164,11 @@ export class DDGI {
             usage: GPUBufferUsage.STORAGE,
         });
 
-        // DDGI uniform buffer (DDGIUniforms struct: 8 vec4 = 128 bytes)
-        this.ddgiUniformBuffer = device.createBuffer({
-            label: "DDGI Uniforms",
-            size: 128,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
         // Random rotation matrix buffer (mat4x4f = 64 bytes)
         this.randomRotationBuffer = device.createBuffer({
             label: "DDGI Random Rotation",
             size: 64,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        // Sampler for atlas sampling
-        this.ddgiSampler = device.createSampler({
-            label: "DDGI Atlas Sampler",
-            magFilter: 'linear',
-            minFilter: 'linear',
-            addressModeU: 'clamp-to-edge',
-            addressModeV: 'clamp-to-edge',
         });
 
         // Border param buffers
@@ -160,8 +190,7 @@ export class DDGI {
             DDGI.VISIBILITY_TEXELS, DDGI.VISIBILITY_WITH_BORDER, DDGI.GRID_X, DDGI.TOTAL_PROBES
         ]));
 
-        this.updateUniforms();
-        this.updateRandomRotation();  // Initialize with a valid rotation
+        this.updateRandomRotation();
 
         // Create pipelines
         this.probeTraceLayout = this.createProbeTraceLayout();
@@ -376,6 +405,9 @@ export class DDGI {
     ) {
         if (!this.enabled) return;
 
+        // Lazy allocation on first use
+        this.ensureResources();
+
         this.updateUniforms();
         this.updateRandomRotation();
 
@@ -460,13 +492,16 @@ export class DDGI {
 
     /**
      * Returns the current "read" atlas views (the one that was just written to).
+     * Before resources are allocated, returns a 1×1 dummy view.
      */
     getCurrentIrradianceView(): GPUTextureView {
+        if (!this._initialized) return this.dummyTextureView;
         // After ping-pong flip, the "just written" is the opposite of current pingPong
         return this.pingPong === 0 ? this.irradianceAtlasBView : this.irradianceAtlasAView;
     }
 
     getCurrentVisibilityView(): GPUTextureView {
+        if (!this._initialized) return this.dummyTextureView;
         return this.pingPong === 0 ? this.visibilityAtlasBView : this.visibilityAtlasAView;
     }
 }

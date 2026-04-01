@@ -6,6 +6,8 @@ import { Environment } from './environment';
 /**
  * Radiance Cascades manager.
  * Replaces DDGI with deterministic inline hierarchy of radiance evaluation.
+ *
+ * GPU resources are lazily allocated on first enable to save memory.
  */
 export class RadianceCascades {
     static readonly GRID_X = shaders.constants.rcProbeGridX;
@@ -30,18 +32,24 @@ export class RadianceCascades {
     enabled = false;
     debugMode = 0; // 0=Off, 1=GI Only, 2=Atlas Overlay
 
-    rcAtlasA: GPUTexture;
-    rcAtlasB: GPUTexture;
-    rcAtlasAView: GPUTextureView;
-    rcAtlasBView: GPUTextureView;
+    // GPU resources (lazily allocated)
+    private _initialized = false;
+
+    rcAtlasA!: GPUTexture;
+    rcAtlasB!: GPUTexture;
+    rcAtlasAView!: GPUTextureView;
+    rcAtlasBView!: GPUTextureView;
 
     private pingPong = 0;
 
     rcUniformBuffer: GPUBuffer;
     rcSampler: GPUSampler;
 
-    tracePipeline: GPUComputePipeline;
-    traceLayout: GPUBindGroupLayout;
+    tracePipeline!: GPUComputePipeline;
+    traceLayout!: GPUBindGroupLayout;
+
+    // Dummy resources for bind group compatibility when not initialized
+    private dummyTextureView: GPUTextureView;
 
     private camera: Camera;
     private environment: Environment;
@@ -49,6 +57,45 @@ export class RadianceCascades {
     constructor(camera: Camera, environment: Environment) {
         this.camera = camera;
         this.environment = environment;
+
+        // Create minimal dummy resources for bind group compatibility
+        const dummyTex = device.createTexture({
+            label: "RC Dummy Texture",
+            size: [1, 1],
+            format: 'rgba16float',
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.dummyTextureView = dummyTex.createView();
+
+        // Uniform buffer is always needed (shader reads rc_enabled flag)
+        this.rcUniformBuffer = device.createBuffer({
+            label: "RC Uniforms",
+            size: 128,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        // Sampler is always needed for bind groups
+        this.rcSampler = device.createSampler({
+            label: "RC Atlas Sampler",
+            magFilter: 'linear',
+            minFilter: 'linear',
+            addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+        });
+
+        this.updateUniforms();
+
+        console.log(`Radiance Cascades configured: ${RadianceCascades.TOTAL_PROBES} Probes (resources deferred)`);
+    }
+
+    /**
+     * Lazily allocate all heavy GPU resources on first enable.
+     */
+    private ensureResources() {
+        if (this._initialized) return;
+        this._initialized = true;
+
+        console.log(`Radiance Cascades: allocating GPU resources...`);
 
         const atlasDesc: GPUTextureDescriptor = {
             label: "RC Atlas",
@@ -60,22 +107,6 @@ export class RadianceCascades {
         this.rcAtlasB = device.createTexture({ ...atlasDesc, label: "RC Atlas B" });
         this.rcAtlasAView = this.rcAtlasA.createView();
         this.rcAtlasBView = this.rcAtlasB.createView();
-
-        this.rcUniformBuffer = device.createBuffer({
-            label: "RC Uniforms",
-            size: 128,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        this.rcSampler = device.createSampler({
-            label: "RC Atlas Sampler",
-            magFilter: 'linear',
-            minFilter: 'linear',
-            addressModeU: 'clamp-to-edge',
-            addressModeV: 'clamp-to-edge',
-        });
-
-        this.updateUniforms();
 
         this.traceLayout = this.createTraceLayout();
         this.tracePipeline = device.createComputePipeline({
@@ -138,6 +169,9 @@ export class RadianceCascades {
     update(encoder: GPUCommandEncoder, voxelGridView: GPUTextureView, sunLightBuffer: GPUBuffer, shadowMapView: GPUTextureView, vsmUniformBuffer: GPUBuffer) {
         if (!this.enabled) return;
 
+        // Lazy allocation on first use
+        this.ensureResources();
+
         this.updateUniforms();
 
         const readAtlas = this.pingPong === 0 ? this.rcAtlasAView : this.rcAtlasBView;
@@ -169,7 +203,11 @@ export class RadianceCascades {
         this.pingPong = 1 - this.pingPong;
     }
 
+    /**
+     * Returns the current irradiance view. Before resources are allocated, returns a 1×1 dummy view.
+     */
     getCurrentIrradianceView(): GPUTextureView {
+        if (!this._initialized) return this.dummyTextureView;
         return this.pingPong === 0 ? this.rcAtlasBView : this.rcAtlasAView;
     }
 }
