@@ -6,18 +6,16 @@ WebGPU Forward+ / Clustered Deferred Renderer
 ## [Live Demo](https://tsingloo.github.io/WebGPU-Playground/)
 
 * **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 4**
-  
-    * Xiaonan Pan
-      * [LinkedIn](https://www.linkedin.com/in/xiaonan-pan-9b0b0b1a7), [My Blog](www.tsingloo.com), [GitHub](https://github.com/TsingLoo)
-    * Tested on: 
-      
-      | Component\Platform | PC                                              | Mobile                                                       |
-      | ------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
-      | OS                 | Google Chrome(141.0.7390.108) @ Windows 11 24H2 | Google Chrome(141.0.7390.111) @ Android 14                   |
-      | CPU/SoC            | Intel 13600KF @ 3.5Ghz                          | [MediaTek Dimensity 8100](https://www.mediatek.com/products/smartphones/mediatek-dimensity-8100) |
-      | GPU                | 4070 SUPER 12GB                                 | Arm Mali-G610 MC6                                            |
-      | RAM                | 32GB RAM                                        | 12GB RAM                                                     |
-      | Model              |                                                 | Redmi K50                                                    |
+
+* Tested on: 
+
+  | Component\Platform | PC                                              | Mobile                                                       |
+  | ------------------ | ----------------------------------------------- | ------------------------------------------------------------ |
+  | OS                 | Google Chrome(141.0.7390.108) @ Windows 11 24H2 | Google Chrome(141.0.7390.111) @ Android 14                   |
+  | CPU/SoC            | Intel 13600KF @ 3.5Ghz                          | [MediaTek Dimensity 8100](https://www.mediatek.com/products/smartphones/mediatek-dimensity-8100) |
+  | GPU                | 4070 SUPER 12GB                                 | Arm Mali-G610 MC6                                            |
+  | RAM                | 32GB RAM                                        | 12GB RAM                                                     |
+  | Model              |                                                 | Redmi K50                                                    |
 
 
 
