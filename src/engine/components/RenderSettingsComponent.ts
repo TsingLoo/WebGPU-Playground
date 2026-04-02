@@ -10,11 +10,12 @@ export class VSMShadowComponent extends Component {
     public virtualSizeMax: string = '16384';
     public maxPhysPagesInfo: string = '1024';
 
-    public getUIOptions(): Record<string, any[]> {
+    public getUIOptions(): Record<string, any> {
         return {
             physAtlasSize: [1024, 2048, 4096, 8192],
             pageSize: [64, 128, 256],
-            pagesPerLevelAxis: [32, 64, 128, 256]
+            pagesPerLevelAxis: [32, 64, 128, 256],
+            numClipmapLevels: { min: 1, step: 1 }
         };
     }
 }
@@ -59,6 +60,18 @@ export class RadianceCascadesComponent extends Component {
                 { label: 'Show GI Only', value: 1 },
                 { label: 'Show Probe Atlas', value: 2 }
             ]
+        };
+    }
+}
+
+export class PointLightSettingsComponent extends Component {
+    public hideEnableInUI = true;
+    public enabled: boolean = false;
+    public count: number = 0;
+
+    public getUIOptions(): Record<string, any> {
+        return {
+            count: { min: 0, step: 1 }
         };
     }
 }

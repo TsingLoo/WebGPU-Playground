@@ -132,8 +132,9 @@ export class SceneTreeUI {
                     } else if (item.el.type === 'number') {
                         // Only update if difference is noticeable
                         const numVal = val as number;
+                        const isInt = item.el.step && parseFloat(item.el.step) % 1 === 0;
                         if (Math.abs(parseFloat(item.el.value) - numVal) > 0.0001) {
-                            item.el.value = numVal.toFixed(3);
+                            item.el.value = isInt ? Math.round(numVal).toString() : numVal.toFixed(3);
                         }
                     }
                 } else if (item.el instanceof HTMLSelectElement) {
@@ -473,7 +474,7 @@ export class SceneTreeUI {
                         row.appendChild(checkbox);
                         if (prop.getVal) this.updatableElements.push({ el: checkbox, getVal: prop.getVal });
                     } else if (typeof prop.initialValue === 'number') {
-                        const numInput = this.createNumberInput(prop.initialValue as number, v => { if (prop.setVal) prop.setVal(v); }, prop.min);
+                        const numInput = this.createNumberInput(prop.initialValue as number, v => { if (prop.setVal) prop.setVal(v); }, prop.min, prop.step);
                         row.appendChild(numInput);
                         if (prop.getVal) this.updatableElements.push({ el: numInput, getVal: prop.getVal });
                     } else if (Array.isArray(prop.initialValue)) {
@@ -485,7 +486,7 @@ export class SceneTreeUI {
                         const arr = prop.initialValue as any[];
                         for (let i = 0; i < arr.length; i++) {
                             if (typeof arr[i] === 'number') {
-                                const numInput = this.createNumberInput(arr[i], v => { if (prop.setArrVal) prop.setArrVal(i, v); }, prop.min);
+                                const numInput = this.createNumberInput(arr[i], v => { if (prop.setArrVal) prop.setArrVal(i, v); }, prop.min, prop.step);
                                 numInput.style.minWidth = "0"; // allow shrinking
                                 arrWrapper.appendChild(numInput);
                                 if (prop.getArrVal) this.updatableElements.push({ el: numInput, getVal: () => prop.getArrVal!(i) });
@@ -524,12 +525,13 @@ export class SceneTreeUI {
         }
     }
 
-    private createNumberInput(val: number, onChange: (v: number) => void, min?: number): HTMLInputElement {
+    private createNumberInput(val: number, onChange: (v: number) => void, min?: number, step: number = 0.1): HTMLInputElement {
         const input = document.createElement('input');
         input.type = 'number';
-        input.step = '0.1';
+        input.step = String(step);
         if (min !== undefined) input.min = String(min);
-        input.value = val.toFixed(3);
+        const formatVal = (v: number) => step % 1 === 0 ? Math.round(v).toString() : v.toFixed(3);
+        input.value = formatVal(val);
         input.className = 'stp-input';
         
         // Hint that it can be dragged
@@ -538,7 +540,8 @@ export class SceneTreeUI {
         input.addEventListener('change', () => {
             let v = parseFloat(input.value);
             if (min !== undefined && v < min) v = min;
-            input.value = v.toFixed(3);
+            if (step % 1 === 0) v = Math.round(v);
+            input.value = formatVal(v);
             onChange(v);
         });
         
@@ -559,13 +562,14 @@ export class SceneTreeUI {
                 document.body.style.userSelect = 'none';
                 document.body.style.cursor = 'ew-resize';
                 
-                let multiplier = 0.02; // Default drag speed
+                let multiplier = step % 1 === 0 ? 0.5 : 0.02; // Default drag speed
                 if (e.shiftKey) multiplier *= 10;
                 if (e.altKey) multiplier *= 0.1;
 
                 let newVal = startVal + deltaX * multiplier;
                 if (min !== undefined && newVal < min) newVal = min;
-                input.value = newVal.toFixed(3);
+                if (step % 1 === 0) newVal = Math.round(newVal);
+                input.value = formatVal(newVal);
                 onChange(newVal);
             }
         };
@@ -593,7 +597,7 @@ export class SceneTreeUI {
         return input;
     }
 
-    private getComponentProperties(comp: Component): {key: string, initialValue: any, readonly?: boolean, min?: number, options?: any[], getVal?: () => any, setVal?: (v: any) => void, getArrVal?: (i: number) => any, setArrVal?: (i: number, v: any) => void}[] {
+    private getComponentProperties(comp: Component): {key: string, initialValue: any, readonly?: boolean, min?: number, step?: number, options?: any[], getVal?: () => any, setVal?: (v: any) => void, getArrVal?: (i: number) => any, setArrVal?: (i: number, v: any) => void}[] {
         const props: any[] = [];
         if (!(comp as any).hideEnableInUI) {
             props.push({ 
@@ -636,10 +640,17 @@ export class SceneTreeUI {
                         setVal: (v: any) => (comp as any)[key] = v
                     });
                 } else if (typeof val === 'number' || typeof val === 'boolean') {
+                    let min = (key === 'intensity' || key.toLowerCase().includes('color')) ? 0 : undefined;
+                    let step = undefined;
+                    if (options && typeof options === 'object' && !Array.isArray(options)) {
+                        if (options.min !== undefined) min = options.min;
+                        if (options.step !== undefined) step = options.step;
+                    }
                     props.push({
                         key,
                         initialValue: val,
-                        min: (key === 'intensity' || key.toLowerCase().includes('color')) ? 0 : undefined,
+                        min,
+                        step,
                         getVal: () => (comp as any)[key],
                         setVal: (v: any) => (comp as any)[key] = v
                     });
