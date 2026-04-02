@@ -1,7 +1,7 @@
 import { Component } from '../Component';
 
 export class VSMShadowComponent extends Component {
-    public hideEnableInUI = true;
+    public enabled: boolean = true;
     public physAtlasSize: number = 4096;
     public pageSize: number = 128;
     public numClipmapLevels: number = 6;
