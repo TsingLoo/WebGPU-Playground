@@ -176,9 +176,6 @@ export abstract class Renderer {
         // Update scene: recompute transforms → upload MeshRenderer GPU buffers
         this.scene.update(deltaTime);
 
-        // UI-driven components sync: ensure GPU buffers like Sun Data are fresh
-        this.stage.updateSunLight();
-
         // Sync pooled dirty regions to the GPU
         globalUniformPool.syncToGPU(device);
 

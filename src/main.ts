@@ -481,9 +481,6 @@ toolsFolder.add(modelUploadController, 'loadModel').name('Load Model (.gltf/.glb
 
 setRenderer(renderModeController.getValue());
 
-
-setRenderer(renderModeController.getValue());
-
 const loadingOverlay = document.getElementById('loading-overlay');
 if (loadingOverlay) {
     loadingOverlay.classList.add('hidden');

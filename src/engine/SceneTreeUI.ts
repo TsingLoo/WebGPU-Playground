@@ -105,7 +105,7 @@ export class SceneTreeUI {
     }
 
     private updateLoop() {
-        if (this.isOpen && this.inspectorPane) {
+        if (this.isOpen && this.inspectorPane && this.selectedEntity) {
             (this.inspectorPane as any).refresh();
         }
         this.updateRAF = requestAnimationFrame(this.updateLoop);

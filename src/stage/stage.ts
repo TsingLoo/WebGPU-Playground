@@ -90,18 +90,21 @@ export class Stage {
         device.queue.writeBuffer(this.sunLightBuffer, 0, data.buffer);
     }
 
-    /**
-     * Runs the full VSM shadow pipeline: clear → mark → allocate → render.
-     * Call after the Z-prepass so the depth buffer is available.
-     */
+    private camPosTuple: [number, number, number] = [0, 0, 0];
+
     renderShadowMap(encoder: GPUCommandEncoder, depthTextureView: GPUTextureView) {
         if (!this.sunEnabled) return;
+
+        const cp = this.camera.cameraPos;
+        this.camPosTuple[0] = cp[0];
+        this.camPosTuple[1] = cp[1];
+        this.camPosTuple[2] = cp[2];
 
         this.vsm.update(
             encoder,
             depthTextureView,
             this.scene,
-            Array.from(this.camera.cameraPos).slice(0, 3) as [number, number, number],
+            this.camPosTuple,
         );
     }
 }
