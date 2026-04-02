@@ -120,11 +120,14 @@ export class Lights {
         // implementing clustering here allows for reusing the code in both Forward+ and Clustered Deferred
     }
 
+    private timeData = new Float32Array(1); // Pre-allocated to avoid per-frame GC
+
     // CHECKITOUT: this is where the light movement compute shader is dispatched from the host
     onFrame(time: number) {
         if (this.numLights === 0) return;
 
-        device.queue.writeBuffer(this.timeUniformBuffer, 0, new Float32Array([time]));
+        this.timeData[0] = time;
+        device.queue.writeBuffer(this.timeUniformBuffer, 0, this.timeData);
 
         // not using same encoder as render pass so this doesn't interfere with measuring actual rendering performance
         const encoder = device.createCommandEncoder({ label: "Move Lights Command Encoder" });

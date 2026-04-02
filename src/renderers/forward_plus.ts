@@ -89,7 +89,20 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
         // Shading pipelines are now dynamically generated via getOrCreateShadingPipeline
     }
 
+    private cachedGiBindGroup: GPUBindGroup | null = null;
+    private lastGiActive = false;
+
     protected override createShadingBindGroup() {
+        const giActive = this.stage.ddgi.enabled || this.stage.radianceCascades.enabled;
+        
+        // Only recreate when GI is active (ping-pong changes views each frame)
+        // or when GI state changed (need to switch between real and dummy views)
+        if (this.cachedGiBindGroup && !giActive && !this.lastGiActive) {
+            this.giDynamicBindGroup = this.cachedGiBindGroup;
+            return;
+        }
+        this.lastGiActive = giActive;
+
         this.giDynamicBindGroup = renderer.device.createBindGroup({
             label: "GI dynamic bind group",
             layout: this.giDynamicBindGroupLayout,
@@ -103,6 +116,10 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 { binding: 6, resource: this.stage.radianceCascades.rcSampler }
             ]
         });
+        
+        if (!giActive) {
+            this.cachedGiBindGroup = this.giDynamicBindGroup;
+        }
     }
 
     protected override executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {

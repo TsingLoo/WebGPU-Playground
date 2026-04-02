@@ -71,6 +71,8 @@ export class Entity {
         }
     }
 
+    public wasTransformDirty: boolean = true;
+
     public updateWorldTransform() {
         if (this.isTransformDirty) {
             if (this.parent) {
@@ -79,6 +81,9 @@ export class Entity {
                 mat4.copy(this.localTransform, this.worldTransform);
             }
             this.isTransformDirty = false;
+            this.wasTransformDirty = true;
+        } else {
+            this.wasTransformDirty = false;
         }
 
         // We only trigger updates on children if needed.

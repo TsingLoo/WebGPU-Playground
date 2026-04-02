@@ -106,6 +106,13 @@ export class VSM {
         this.createComputePipelines();
         this.createShadowPipeline();
 
+        // Invalidate cached bind groups — they reference old buffers
+        this.cachedClearBG = null;
+        this.cachedAllocBG = null;
+        this.cachedMarkBG = null;
+        this.cachedMarkDepthView = null;
+        this.cachedShadowBGs = [];
+
         // Defer destruction of old resources until the GPU finishes processing
         // any previously submitted commands that may still reference them
         device.queue.onSubmittedWorkDone().then(() => {
@@ -281,12 +288,10 @@ export class VSM {
      * Each level covers a radius of 2^(level + 4) units from the camera.
      * Returns an array of 6 Float32Array(16) VP matrices.
      */
-    computeClipmapVPMatrices(cameraPos: [number, number, number]): Float32Array[] {
+    computeClipmapVPMatricesInPlace(cameraPos: [number, number, number]) {
         const d = this.sunDirection;
         const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
         const lightDir = [d[0] / len, d[1] / len, d[2] / len]; // direction TO light
-
-        const vpMatrices: Float32Array[] = [];
 
         for (let level = 0; level < this.numClipmapLevels; level++) {
             const radius = Math.pow(2, level + 4); // 16, 32, 64, 128, 256, 512
@@ -317,61 +322,51 @@ export class VSM {
             ];
 
             // ---- Snap in light-space to eliminate sub-texel jitter ----
-            // Project camera center into light-space (right/up axes)
             const camDotRight = right[0] * cameraPos[0] + right[1] * cameraPos[1] + right[2] * cameraPos[2];
             const camDotUp = up[0] * cameraPos[0] + up[1] * cameraPos[1] + up[2] * cameraPos[2];
             const camDotFwd = fwd[0] * cameraPos[0] + fwd[1] * cameraPos[1] + fwd[2] * cameraPos[2];
 
-            // Each texel covers (2 * radius) / tilePixels world units
-            // With the square grid layout, each level renders to a tileSize × tileSize region
             const gridCols = Math.ceil(Math.sqrt(this.numClipmapLevels));
             const tilePixels = Math.floor(this.physAtlasSize / gridCols);
             const texelWorldSize = (2 * radius) / tilePixels;
 
-            // Snap the light-space X/Y to texel boundaries
             const snappedRight = Math.floor(camDotRight / texelWorldSize) * texelWorldSize;
             const snappedUp = Math.floor(camDotUp / texelWorldSize) * texelWorldSize;
 
-            // Reconstruct snapped world center: project back from light-space
-            // snappedCenter = snappedRight * right + snappedUp * up + camDotFwd * fwd
             const snappedCenter = [
                 snappedRight * right[0] + snappedUp * up[0] + camDotFwd * fwd[0],
                 snappedRight * right[1] + snappedUp * up[1] + camDotFwd * fwd[1],
                 snappedRight * right[2] + snappedUp * up[2] + camDotFwd * fwd[2],
             ];
 
-            // Light "eye" position — far enough back along light direction
             const lightDist = radius * 2;
             const eyeX = snappedCenter[0] + lightDir[0] * lightDist;
             const eyeY = snappedCenter[1] + lightDir[1] * lightDist;
             const eyeZ = snappedCenter[2] + lightDir[2] * lightDist;
 
-            // View matrix (column-major)
-            const view = new Float32Array([
-                right[0], up[0], -fwd[0], 0,
-                right[1], up[1], -fwd[1], 0,
-                right[2], up[2], -fwd[2], 0,
-                -(right[0] * eyeX + right[1] * eyeY + right[2] * eyeZ),
-                -(up[0] * eyeX + up[1] * eyeY + up[2] * eyeZ),
-                (fwd[0] * eyeX + fwd[1] * eyeY + fwd[2] * eyeZ),
-                1
-            ]);
+            // View matrix (column-major) — reuse pre-allocated buffer
+            const view = this.vpViewMat;
+            view[0] = right[0]; view[1] = up[0]; view[2] = -fwd[0]; view[3] = 0;
+            view[4] = right[1]; view[5] = up[1]; view[6] = -fwd[1]; view[7] = 0;
+            view[8] = right[2]; view[9] = up[2]; view[10] = -fwd[2]; view[11] = 0;
+            view[12] = -(right[0] * eyeX + right[1] * eyeY + right[2] * eyeZ);
+            view[13] = -(up[0] * eyeX + up[1] * eyeY + up[2] * eyeZ);
+            view[14] = (fwd[0] * eyeX + fwd[1] * eyeY + fwd[2] * eyeZ);
+            view[15] = 1;
 
-            // Orthographic projection: [-radius, radius] on X/Y, [0, 2*lightDist] on Z
-            // Column-major, WebGPU [0,1] depth
+            // Orthographic projection — reuse pre-allocated buffer
             const nearZ = 0;
             const farZ = lightDist * 2;
-            const ortho = new Float32Array(16);
-            ortho[0] = 1 / radius;        // 2 / (2*radius)
+            const ortho = this.vpOrthoMat;
+            ortho.fill(0);
+            ortho[0] = 1 / radius;
             ortho[5] = 1 / radius;
-            ortho[10] = 1 / (nearZ - farZ);  // maps near→0, far→1
-            ortho[12] = 0;
-            ortho[13] = 0;
+            ortho[10] = 1 / (nearZ - farZ);
             ortho[14] = -nearZ / (nearZ - farZ);
             ortho[15] = 1;
 
-            // VP = ortho × view
-            const vp = new Float32Array(16);
+            // VP = ortho × view — write to pool
+            const vp = this.vpMatricesPool[level];
             for (let col = 0; col < 4; col++) {
                 for (let row = 0; row < 4; row++) {
                     let sum = 0;
@@ -381,62 +376,129 @@ export class VSM {
                     vp[col * 4 + row] = sum;
                 }
             }
-
-            vpMatrices.push(vp);
         }
-
-        return vpMatrices;
     }
 
     private uniformData = new ArrayBuffer(592);
+    private uniformF32 = new Float32Array(this.uniformData);
+    private uniformU32 = new Uint32Array(this.uniformData);
+    private invViewProjOut = new Float32Array(16);
+
+    // Pre-allocated VP matrices to avoid per-frame allocation
+    private vpMatricesPool: Float32Array[] = [];
+    private vpViewMat = new Float32Array(16);
+    private vpOrthoMat = new Float32Array(16);
+
+    private ensureVPPool() {
+        if (this.vpMatricesPool.length < this.numClipmapLevels) {
+            this.vpMatricesPool = [];
+            for (let i = 0; i < this.numClipmapLevels; i++) {
+                this.vpMatricesPool.push(new Float32Array(16));
+            }
+        }
+    }
 
     /**
      * Update VSM uniform buffer with current clipmap matrices and params.
      */
     updateUniforms(cameraPos: [number, number, number]) {
-        const vpMatrices = this.computeClipmapVPMatrices(cameraPos);
+        this.ensureVPPool();
+        this.computeClipmapVPMatricesInPlace(cameraPos);
 
-        // Compute inverse view-projection for world reconstruction in mark pass
-        // Camera stores view-proj matrix in first 16 floats of its uniform buffer
         const viewProjMat = new Float32Array(this.camera.uniforms.buffer, 0, 16);
-        const invViewProj = this.invertMatrix4(viewProjMat);
+        this.invertMatrix4InPlace(viewProjMat, this.invViewProjOut);
 
-        // Buffer layout (must match WGSL VSMUniforms with array<mat4x4f, 8>):
-        //   0..511:   8 × mat4x4f clipmap_vp (8*64 = 512 bytes, 128 floats)
-        //   512..575:  mat4x4f inv_view_proj (64 bytes, 16 floats)
-        //   576..591:  4 × u32 params (16 bytes, 4 ints)
-        //   total = 592 bytes
-        const data = this.uniformData;
-        const f32 = new Float32Array(data);
-        const u32 = new Uint32Array(data);
+        const f32 = this.uniformF32;
+        const u32 = this.uniformU32;
 
-        // Clipmap VP matrices (slots 0..MAX_CLIPMAP_LEVELS-1, unused ones stay zero)
         for (let i = 0; i < this.numClipmapLevels; i++) {
-            f32.set(vpMatrices[i], i * 16);
+            f32.set(this.vpMatricesPool[i], i * 16);
         }
 
-        // Inverse view-projection at float offset 128 (= 8 * 16)
-        const vpOffset = VSM.MAX_CLIPMAP_LEVELS * 16; // 128
-        f32.set(invViewProj, vpOffset);
+        const vpOffset = VSM.MAX_CLIPMAP_LEVELS * 16;
+        f32.set(this.invViewProjOut, vpOffset);
 
-        // Params at float offset 144 (= 128 + 16)
-        const paramsOffset = vpOffset + 16; // 144
+        const paramsOffset = vpOffset + 16;
         u32[paramsOffset + 0] = this.numClipmapLevels;
         u32[paramsOffset + 1] = this.pagesPerLevelAxis;
         u32[paramsOffset + 2] = this.physAtlasSize;
         u32[paramsOffset + 3] = this.physPagesPerAxis;
 
-        device.queue.writeBuffer(this.vsmUniformBuffer, 0, data);
+        device.queue.writeBuffer(this.vsmUniformBuffer, 0, this.uniformData);
 
-        // Also update per-level VP buffers for shadow rendering
         for (let i = 0; i < this.numClipmapLevels; i++) {
-            device.queue.writeBuffer(this.clipmapVPBuffers[i], 0, vpMatrices[i].buffer);
+            device.queue.writeBuffer(this.clipmapVPBuffers[i], 0, this.vpMatricesPool[i].buffer);
         }
     }
 
     /**
      * Runs the full VSM pipeline: clear → mark → allocate → render shadows.
      */
+    // Cached bind groups for compute passes (buffers never change between frames)
+    private cachedClearBG: GPUBindGroup | null = null;
+    private cachedAllocBG: GPUBindGroup | null = null;
+    // Mark pass BG is per-depthTextureView, cache last one
+    private cachedMarkBG: GPUBindGroup | null = null;
+    private cachedMarkDepthView: GPUTextureView | null = null;
+    // Shadow pass per-level bind groups
+    private cachedShadowBGs: GPUBindGroup[] = [];
+
+    // Pre-allocated workgroup counts
+    private clearWorkgroups = 0;
+    private allocWorkgroups = 0;
+    private markWorkgroupsX = 0;
+    private markWorkgroupsY = 0;
+
+    private ensureBindGroups(depthTextureView: GPUTextureView) {
+        if (!this.cachedClearBG) {
+            this.cachedClearBG = device.createBindGroup({
+                layout: this.clearBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.pageRequestBuffer } },
+                    { binding: 1, resource: { buffer: this.allocStateBuffer } },
+                    { binding: 2, resource: { buffer: this.pageTableBuffer } },
+                    { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
+                ],
+            });
+            this.cachedAllocBG = device.createBindGroup({
+                layout: this.allocateBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.pageRequestBuffer } },
+                    { binding: 1, resource: { buffer: this.pageTableBuffer } },
+                    { binding: 2, resource: { buffer: this.allocStateBuffer } },
+                    { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
+                ],
+            });
+            this.clearWorkgroups = Math.ceil(this.totalVirtualPages / 256);
+            this.allocWorkgroups = Math.ceil(this.totalVirtualPages / 256);
+            this.markWorkgroupsX = Math.ceil(renderer.canvas.width / 8);
+            this.markWorkgroupsY = Math.ceil(renderer.canvas.height / 8);
+
+            // Cache shadow per-level bind groups
+            this.cachedShadowBGs = [];
+            for (let i = 0; i < this.numClipmapLevels; i++) {
+                this.cachedShadowBGs.push(device.createBindGroup({
+                    layout: this.shadowBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.clipmapVPBuffers[i] } },
+                    ],
+                }));
+            }
+        }
+        if (this.cachedMarkDepthView !== depthTextureView) {
+            this.cachedMarkBG = device.createBindGroup({
+                layout: this.markPagesBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
+                    { binding: 1, resource: depthTextureView },
+                    { binding: 2, resource: { buffer: this.pageRequestBuffer } },
+                    { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
+                ],
+            });
+            this.cachedMarkDepthView = depthTextureView;
+        }
+    }
+
     update(
         encoder: GPUCommandEncoder,
         depthTextureView: GPUTextureView,
@@ -444,56 +506,27 @@ export class VSM {
         cameraPos: [number, number, number],
     ) {
         this.updateUniforms(cameraPos);
+        this.ensureBindGroups(depthTextureView);
 
         // 1. Clear pass
-        const clearBG = device.createBindGroup({
-            layout: this.clearBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.pageRequestBuffer } },
-                { binding: 1, resource: { buffer: this.allocStateBuffer } },
-                { binding: 2, resource: { buffer: this.pageTableBuffer } },
-                { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
-            ],
-        });
         const clearPass = encoder.beginComputePass({ label: "VSM Clear" });
         clearPass.setPipeline(this.clearPipeline);
-        clearPass.setBindGroup(0, clearBG);
-        clearPass.dispatchWorkgroups(Math.ceil(this.totalVirtualPages / 256));
+        clearPass.setBindGroup(0, this.cachedClearBG!);
+        clearPass.dispatchWorkgroups(this.clearWorkgroups);
         clearPass.end();
 
         // 2. Mark pages pass
-        const markBG = device.createBindGroup({
-            layout: this.markPagesBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                { binding: 1, resource: depthTextureView },
-                { binding: 2, resource: { buffer: this.pageRequestBuffer } },
-                { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
-            ],
-        });
         const markPass = encoder.beginComputePass({ label: "VSM Mark Pages" });
         markPass.setPipeline(this.markPagesPipeline);
-        markPass.setBindGroup(0, markBG);
-        markPass.dispatchWorkgroups(
-            Math.ceil(renderer.canvas.width / 8),
-            Math.ceil(renderer.canvas.height / 8),
-        );
+        markPass.setBindGroup(0, this.cachedMarkBG!);
+        markPass.dispatchWorkgroups(this.markWorkgroupsX, this.markWorkgroupsY);
         markPass.end();
 
         // 3. Allocate pages pass
-        const allocBG = device.createBindGroup({
-            layout: this.allocateBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.pageRequestBuffer } },
-                { binding: 1, resource: { buffer: this.pageTableBuffer } },
-                { binding: 2, resource: { buffer: this.allocStateBuffer } },
-                { binding: 3, resource: { buffer: this.vsmUniformBuffer } },
-            ],
-        });
         const allocPass = encoder.beginComputePass({ label: "VSM Allocate Pages" });
         allocPass.setPipeline(this.allocatePagesPipeline);
-        allocPass.setBindGroup(0, allocBG);
-        allocPass.dispatchWorkgroups(Math.ceil(this.totalVirtualPages / 256));
+        allocPass.setBindGroup(0, this.cachedAllocBG!);
+        allocPass.dispatchWorkgroups(this.allocWorkgroups);
         allocPass.end();
 
         // 4. Render shadow depth per clipmap level
@@ -527,13 +560,7 @@ export class VSM {
         const tileSize = Math.floor(this.physAtlasSize / gridCols);
 
         for (let level = 0; level < this.numClipmapLevels; level++) {
-            const bg = device.createBindGroup({
-                layout: this.shadowBindGroupLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.clipmapVPBuffers[level] } },
-                ],
-            });
-            shadowPass.setBindGroup(0, bg);
+            shadowPass.setBindGroup(0, this.cachedShadowBGs[level]);
 
             // Grid position for this level
             const col = level % gridCols;
@@ -560,8 +587,7 @@ export class VSM {
     /**
      * 4x4 matrix inversion (column-major).
      */
-    private invertMatrix4(m: Float32Array): Float32Array {
-        const out = new Float32Array(16);
+    private invertMatrix4InPlace(m: Float32Array, out: Float32Array) {
         const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
         const a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
         const a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11];
@@ -581,7 +607,7 @@ export class VSM {
         const b11 = a22 * a33 - a23 * a32;
 
         let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
-        if (!det) return out;
+        if (!det) return;
         det = 1.0 / det;
 
         out[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
@@ -600,7 +626,5 @@ export class VSM {
         out[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
         out[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
         out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
-
-        return out;
     }
 }

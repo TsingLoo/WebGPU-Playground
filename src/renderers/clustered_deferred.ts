@@ -163,7 +163,18 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
         });
     }
 
+    private cachedGiBindGroup: GPUBindGroup | null = null;
+    private lastGiActive = false;
+
     protected override createShadingBindGroup() {
+        const giActive = this.stage.ddgi.enabled || this.stage.radianceCascades.enabled;
+        
+        if (this.cachedGiBindGroup && !giActive && !this.lastGiActive) {
+            this.giDynamicBindGroup = this.cachedGiBindGroup;
+            return;
+        }
+        this.lastGiActive = giActive;
+
         this.giDynamicBindGroup = renderer.device.createBindGroup({
             label: "GI dynamic bind group",
             layout: this.giDynamicBindGroupLayout,
@@ -177,6 +188,10 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 6, resource: this.stage.radianceCascades.rcSampler }
             ]
         });
+        
+        if (!giActive) {
+            this.cachedGiBindGroup = this.giDynamicBindGroup;
+        }
     }
 
     protected override executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {

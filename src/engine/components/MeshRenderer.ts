@@ -41,12 +41,16 @@ export class MeshRenderer extends Component {
         }
     }
 
+    private needsInitialUpload = true;
+
     override onUpdate(_dt: number): void {
-        // Sync transform to GPU pool array if component has an entity
+        // Only sync transform to GPU when it actually changed
         if (this.poolAlloc && this.entity && this.entity.worldTransform) {
-            // Write directly to the CPU view and mark dirty
-            this.poolAlloc.view.set(this.entity.worldTransform);
-            globalUniformPool.markDirty(this.poolAlloc.offset, this.poolAlloc.sizeBytes);
+            if (this.entity.wasTransformDirty || this.needsInitialUpload) {
+                this.poolAlloc.view.set(this.entity.worldTransform);
+                globalUniformPool.markDirty(this.poolAlloc.offset, this.poolAlloc.sizeBytes);
+                this.needsInitialUpload = false;
+            }
         }
     }
 
