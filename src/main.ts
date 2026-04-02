@@ -40,6 +40,8 @@ scene.bvhData = gltfResult.bvhData;
 scene.voxelGrid = gltfResult.voxelGrid;
 scene.voxelGridView = gltfResult.voxelGridView;
 scene.globalMaterialBuffer = gltfResult.globalMaterialBuffer;
+scene.baseColorTexArray = gltfResult.baseColorTexArray;
+scene.baseColorTexArrayView = gltfResult.baseColorTexArrayView;
 scene.root.updateWorldTransform();
 
 const sceneTreeUI = new SceneTreeUI();
@@ -460,6 +462,8 @@ modelFileInput.addEventListener('change', async (event) => {
         newScene.voxelGrid = result.voxelGrid;
         newScene.voxelGridView = result.voxelGridView;
         newScene.globalMaterialBuffer = result.globalMaterialBuffer;
+        newScene.baseColorTexArray = result.baseColorTexArray;
+        newScene.baseColorTexArrayView = result.baseColorTexArrayView;
         newScene.root.updateWorldTransform();
         addHelpersToScene(newScene, camera, stage);
         stage.scene = newScene;

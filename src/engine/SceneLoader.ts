@@ -72,6 +72,8 @@ export class SceneLoader {
                     scene.voxelGrid = result.voxelGrid;
                     scene.voxelGridView = result.voxelGridView;
                     scene.globalMaterialBuffer = result.globalMaterialBuffer;
+                    scene.baseColorTexArray = result.baseColorTexArray;
+                    scene.baseColorTexArrayView = result.baseColorTexArrayView;
                 } else if (compConfig.type === 'DirectionalLightComponent') {
                     const light = entity.addComponent(new DirectionalLightComponent());
                     if (compConfig.direction) light.direction = compConfig.direction;

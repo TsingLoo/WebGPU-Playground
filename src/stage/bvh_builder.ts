@@ -8,6 +8,7 @@ export class BVHData {
     nodeBuffer!: GPUBuffer;
     positionBuffer!: GPUBuffer;
     indexBuffer!: GPUBuffer;
+    uvBuffer!: GPUBuffer;  // per-vertex UV (vec4f: xy = UV, zw = pad)
     triangleMaterialBuffer!: GPUBuffer; // per-triangle material index
     triangleCount: number = 0;
 }
@@ -38,11 +39,13 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     console.log(`Total Triangles for BVH: ${totalTris}`);
     
     const positions = new Float32Array(totalVerts * 3);
+    const uvs = new Float32Array(totalVerts * 2);
     const indices = new Uint32Array(totalTris * 3);
     const vertexMaterials = new Uint32Array(totalVerts); // Map vertex -> material
     
     let triOffset = 0;
     let vertOffset = 0;
+    let uvOffset = 0;
     
     nodes = [sceneRoot];
     while (nodes.length > 0) {
@@ -54,19 +57,33 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
                 
                 const pos = prim.cpuPositions;
                 const ind = prim.cpuIndices;
+                const primUVs = prim.cpuUVs;
                 const mat = node.worldTransform;
                 const materialId = prim.material.id;
                 
-                // const numVerts = positionAttribute.count;
                 const baseVertIndex = vertOffset / 3;
+                const numPrimVerts = pos.length / 3;
                 
-                // Add transformed vertices
+                // Add transformed vertices + UVs
                 for (let i = 0; i < pos.length; i += 3) {
                     const x = pos[i], y = pos[i+1], z = pos[i+2];
                     positions[vertOffset++] = x*mat[0] + y*mat[4] + z*mat[8] + mat[12];
                     positions[vertOffset++] = x*mat[1] + y*mat[5] + z*mat[9] + mat[13];
                     positions[vertOffset++] = x*mat[2] + y*mat[6] + z*mat[10] + mat[14];
                     vertexMaterials[baseVertIndex + i/3] = materialId;
+                }
+                
+                // Copy UVs (no transform needed)
+                if (primUVs) {
+                    for (let i = 0; i < numPrimVerts; i++) {
+                        uvs[uvOffset++] = primUVs[i * 2];
+                        uvs[uvOffset++] = primUVs[i * 2 + 1];
+                    }
+                } else {
+                    for (let i = 0; i < numPrimVerts; i++) {
+                        uvs[uvOffset++] = 0;
+                        uvs[uvOffset++] = 0;
+                    }
                 }
                 
                 // Add indices
@@ -92,7 +109,7 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     const reorderedIndices = geometry.getIndex()!.array;
     
     // 3. Pack for WebGPU
-    // array<vec3f> has stride 16 (4 floats). So we must expand positions.
+    // array<vec4f> stride 16. Expand positions to vec4f.
     const wgpuPositions = new Float32Array(totalVerts * 4);
     for (let i = 0; i < totalVerts; i++) {
         wgpuPositions[i*4 + 0] = positions[i*3 + 0];
@@ -101,7 +118,16 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
         wgpuPositions[i*4 + 3] = 0; 
     }
     
-    // array<vec3u> has stride 16 (4 ints). We'll pack `(i0, i1, i2, matId)`.
+    // Pack UVs to vec4f (xy = UV, zw = 0)
+    const wgpuUVs = new Float32Array(totalVerts * 4);
+    for (let i = 0; i < totalVerts; i++) {
+        wgpuUVs[i*4 + 0] = uvs[i*2 + 0];
+        wgpuUVs[i*4 + 1] = uvs[i*2 + 1];
+        wgpuUVs[i*4 + 2] = 0;
+        wgpuUVs[i*4 + 3] = 0;
+    }
+    
+    // array<vec4u> stride 16. Pack `(i0, i1, i2, matId)`.
     const wgpuIndices = new Uint32Array(totalTris * 4);
     for (let i = 0; i < totalTris; i++) {
         let idx0 = reorderedIndices[i*3 + 0];
@@ -132,6 +158,13 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     });
     device.queue.writeBuffer(posGpuBuffer, 0, wgpuPositions);
     
+    const uvGpuBuffer = device.createBuffer({
+        label: "BVH UV Buffer",
+        size: wgpuUVs.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    device.queue.writeBuffer(uvGpuBuffer, 0, wgpuUVs);
+    
     const indexGpuBuffer = device.createBuffer({
         label: "BVH Index Buffer",
         size: wgpuIndices.byteLength,
@@ -142,6 +175,7 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     const bvhData = new BVHData();
     bvhData.nodeBuffer = nodeGpuBuffer;
     bvhData.positionBuffer = posGpuBuffer;
+    bvhData.uvBuffer = uvGpuBuffer;
     bvhData.indexBuffer = indexGpuBuffer;
     bvhData.triangleCount = totalTris;
     console.log("BVH Generation Complete.");

@@ -354,6 +354,9 @@ export class DDGI {
                 { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },    // sun light
                 { binding: 14, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'depth' } }, // VSM physical atlas
                 { binding: 15, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },     // VSM uniforms
+                { binding: 16, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvhUVs
+                { binding: 17, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // baseColor tex array
+                { binding: 18, visibility: GPUShaderStage.COMPUTE, sampler: {} },                     // baseColor sampler
             ]
         });
     }
@@ -405,6 +408,8 @@ export class DDGI {
         sunLightBuffer: GPUBuffer,
         shadowMapView: GPUTextureView,
         vsmUniformBuffer: GPUBuffer,
+        bvhUVBuffer: GPUBuffer,
+        baseColorTexArrayView: GPUTextureView,
     ) {
         if (!this.enabled) return;
 
@@ -419,6 +424,12 @@ export class DDGI {
         const writeIrr = this.pingPong === 0 ? this.irradianceAtlasBView : this.irradianceAtlasAView;
         const readVis = this.pingPong === 0 ? this.visibilityAtlasAView : this.visibilityAtlasBView;
         const writeVis = this.pingPong === 0 ? this.visibilityAtlasBView : this.visibilityAtlasAView;
+
+        // BaseColor array sampler
+        const baseColorSampler = device.createSampler({
+            magFilter: 'linear', minFilter: 'linear',
+            addressModeU: 'repeat', addressModeV: 'repeat',
+        });
 
         // 1. Probe Ray Trace
         const traceBindGroup = device.createBindGroup({
@@ -440,6 +451,9 @@ export class DDGI {
                 { binding: 13, resource: { buffer: sunLightBuffer } },
                 { binding: 14, resource: shadowMapView },
                 { binding: 15, resource: { buffer: vsmUniformBuffer } },
+                { binding: 16, resource: { buffer: bvhUVBuffer } },
+                { binding: 17, resource: baseColorTexArrayView },
+                { binding: 18, resource: baseColorSampler },
             ]
         });
 

@@ -14,6 +14,8 @@ export class Scene {
     public voxelGrid!: GPUTexture;
     public voxelGridView!: GPUTextureView;
     public globalMaterialBuffer!: GPUBuffer;
+    public baseColorTexArray!: GPUTexture;
+    public baseColorTexArrayView!: GPUTextureView;
     
     // Fast lookup caches
     private componentsCache: Map<Function, Set<Component>> = new Map();
