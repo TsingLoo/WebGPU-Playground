@@ -81,6 +81,7 @@ export class PointLightSettingsComponent extends Component {
 }
 
 export class SSAOComponent extends Component {
+    public enabled: boolean = true;
     public radius: number = 1.0;
     public bias: number = 0.025;
     public power: number = 1.0;

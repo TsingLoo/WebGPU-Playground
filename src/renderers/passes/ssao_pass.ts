@@ -84,7 +84,19 @@ export class SSAOPass {
         });
     }
 
-    execute(encoder: GPUCommandEncoder) {
+    execute(encoder: GPUCommandEncoder, enabled: boolean = true) {
+        if (!enabled) {
+            // Fast clear to white (no occlusion) so the shading passes don't read garbage old frames
+            const clearPass = encoder.beginRenderPass({
+                label: "SSAO disabled clear pass",
+                colorAttachments: [{
+                    view: this._blurredTextureView, clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
+                }]
+            });
+            clearPass.end();
+            return;
+        }
+
         // SSAO generation
         const ssaoPass = encoder.beginRenderPass({
             label: "SSAO pass",
