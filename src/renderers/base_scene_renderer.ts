@@ -322,7 +322,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.createShadingBindGroup();
 
         // 8. SSAO
-        this.ssaoPass.execute(encoder);
+        this.ssaoPass.execute(encoder, this.stage.ssao.enabled);
 
         // 9. Sub-class shading pass
         this.executeShadingPass(encoder, canvasTextureView);

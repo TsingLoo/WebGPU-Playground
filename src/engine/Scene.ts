@@ -85,22 +85,21 @@ export class Scene {
         primitiveFunction: (primitive: Primitive) => void,
         isOpaque?: boolean
     ) {
-        let nodes: Entity[] = [this.root];
-        while (nodes.length > 0) {
-            let entity = nodes.pop()!;
-            
-            const mr = entity.getComponent(MeshRenderer) as MeshRenderer;
-            if (mr && mr.mesh && mr.modelBindGroup) {
+        const meshRenderers = this.componentsCache.get(MeshRenderer);
+        if (!meshRenderers) return;
+
+        for (const comp of meshRenderers) {
+            const mr = comp as MeshRenderer;
+            if (mr.mesh && mr.modelBindGroup) {
                 nodeFunction(mr);
-                for (let prim of mr.mesh.primitives) {
+                const primitives = mr.mesh.primitives;
+                for (let i = 0; i < primitives.length; i++) {
+                    const prim = primitives[i];
                     if (isOpaque === undefined || (prim.material.type === 'opaque') === isOpaque) {
                         materialFunction(prim.material);
                         primitiveFunction(prim);
                     }
                 }
-            }
-            for (let child of entity.children) {
-                nodes.push(child);
             }
         }
     }
