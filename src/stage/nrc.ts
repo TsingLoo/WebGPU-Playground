@@ -2,6 +2,7 @@ import { device, canvas } from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
 import { Environment } from './environment';
+import { pipelineCache } from '../engine/PipelineCache';
 
 /**
  * Neural Radiance Caching (NRC) manager.
@@ -157,7 +158,7 @@ export class NRC {
         this.inferenceLayout = this.createInferenceLayout();
 
         // ---- Create Compute Pipelines ----
-        this.scatterPipeline = device.createComputePipeline({
+        this.scatterPipeline = pipelineCache.getComputePipeline(device, {
             label: "NRC Scatter Training Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.scatterLayout] }),
             compute: {
@@ -167,9 +168,9 @@ export class NRC {
                 }),
                 entryPoint: 'main',
             },
-        });
+        }, "NRC_Scatter");
 
-        this.trainPipeline = device.createComputePipeline({
+        this.trainPipeline = pipelineCache.getComputePipeline(device, {
             label: "NRC Train Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.trainLayout] }),
             compute: {
@@ -179,9 +180,9 @@ export class NRC {
                 }),
                 entryPoint: 'main',
             },
-        });
+        }, "NRC_Train");
 
-        this.inferencePipeline = device.createComputePipeline({
+        this.inferencePipeline = pipelineCache.getComputePipeline(device, {
             label: "NRC Inference Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.inferenceLayout] }),
             compute: {
@@ -191,14 +192,17 @@ export class NRC {
                 }),
                 entryPoint: 'main',
             },
-        });
+        }, "NRC_Inference");
 
         this.updateUniforms();
         console.log(`NRC initialized: MLP ${NRC.TOTAL_PARAMS} params, max ${NRC.MAX_TRAINING_SAMPLES} training samples/frame`);
     }
 
+    private uniformData = new Float32Array(16); // 64 bytes = 16 floats
+    private paramsUpdateData = new Float32Array(4);
+
     updateUniforms() {
-        const data = new Float32Array(16); // 64 bytes = 16 floats
+        const data = this.uniformData;
 
         // scene_min: vec4f (xyz = scene min, w = enabled)
         data[0] = this.sceneMin[0]; data[1] = this.sceneMin[1]; data[2] = this.sceneMin[2]; data[3] = this.enabled ? 1.0 : 0.0;
@@ -340,7 +344,7 @@ export class NRC {
             NRC.MAX_TRAINING_SAMPLES
         );
         // Update just the num_samples field
-        const paramsUpdate = new Float32Array(4);
+        const paramsUpdate = this.paramsUpdateData;
         paramsUpdate[0] = this.learningRate;
         paramsUpdate[1] = estimatedSamples;
         paramsUpdate[2] = this.momentum;

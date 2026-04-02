@@ -2,6 +2,7 @@ import { device } from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
 import { Scene } from '../engine/Scene';
+import { pipelineCache } from '../engine/PipelineCache';
 
 export class SurfelGI {
     enabled = false; // Disabled by default to avoid conflict with DDGI
@@ -195,11 +196,11 @@ export class SurfelGI {
 
         // Group removed (merged to integratorLayout)
         
-        this.integratorPipeline = device.createComputePipeline({
+        this.integratorPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Integrator Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.integratorLayout, bvhLayout, envLayout, randLayout] }),
             compute: { module: this.createShader(device, shaders.surfelIntegratorSrc, "Integrator"), entryPoint: 'integratorMain' }
-        });
+        }, "Surfel_Integrator");
 
         // Resolve layout
         this.resolveLayout = device.createBindGroupLayout({
@@ -217,53 +218,56 @@ export class SurfelGI {
             ]
         });
         
-        this.resolvePipeline = device.createComputePipeline({
+        this.resolvePipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Resolve Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.resolveLayout] }),
             compute: { module: this.createShader(device, shaders.surfelResolveSrc, "Resolve"), entryPoint: 'resolveMain' }
-        });
+        }, "Surfel_Resolve");
         
         // Let's instantiate grid shaders lazily or directly
-        this.clearCountersPipeline = device.createComputePipeline({
+        this.clearCountersPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Grid Clear Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.gridLayout] }),
             compute: { module: this.createShader(device, shaders.surfelGridSrc, "Grid"), entryPoint: 'clearCounters' }
-        });
+        }, "Surfel_Grid_Clear");
         
-        this.countSurfelsPipeline = device.createComputePipeline({
+        this.countSurfelsPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Grid Count Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.gridLayout] }),
             compute: { module: this.createShader(device, shaders.surfelGridSrc, "Grid"), entryPoint: 'countSurfels' }
-        });
+        }, "Surfel_Grid_Count");
         
-        this.prefixSumPipeline = device.createComputePipeline({
+        this.prefixSumPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Grid Prefix Sum Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.gridLayout] }),
             compute: { module: this.createShader(device, shaders.surfelGridSrc, "Grid"), entryPoint: 'prefixSum' }
-        });
+        }, "Surfel_Grid_PrefixSum");
         
-        this.slotSurfelsPipeline = device.createComputePipeline({
+        this.slotSurfelsPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Grid Slot Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.gridLayout] }),
             compute: { module: this.createShader(device, shaders.surfelGridSrc, "Grid"), entryPoint: 'slotSurfels' }
-        });
+        }, "Surfel_Grid_Slot");
 
         // Lifecycle pipelines
-        this.findMissingPipeline = device.createComputePipeline({
+        this.findMissingPipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Lifecycle Find Missing Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.lifecycleLayout] }),
             compute: { module: this.createShader(device, shaders.surfelLifecycleSrc, "Lifecycle"), entryPoint: 'findMissing' }
-        });
+        }, "Surfel_FindMissing");
 
-        this.agePipeline = device.createComputePipeline({
+        this.agePipeline = pipelineCache.getComputePipeline(device, {
             label: "Surfel Lifecycle Age Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.lifecycleLayout] }),
             compute: { module: this.createShader(device, shaders.surfelLifecycleSrc, "Lifecycle"), entryPoint: 'ageSurfels' }
-        });
+        }, "Surfel_Age");
     }
 
+    private uniformData = new ArrayBuffer(64);
+    private randData = new Uint32Array(4);
+
     updateUniforms() {
-        const data = new ArrayBuffer(64);
+        const data = this.uniformData;
         const f32View = new Float32Array(data);
         const u32View = new Uint32Array(data);
 
@@ -287,7 +291,7 @@ export class SurfelGI {
         
         // Random buffer
         this.frameCount++;
-        const randData = new Uint32Array(4);
+        const randData = this.randData;
         randData[0] = Math.floor(Math.random() * 0xffffffff);
         randData[1] = this.frameCount;
         device.queue.writeBuffer(this.randomBuffer, 0, randData);

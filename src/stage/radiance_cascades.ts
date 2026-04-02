@@ -2,6 +2,7 @@ import { device } from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
 import { Environment } from './environment';
+import { pipelineCache } from '../engine/PipelineCache';
 
 /**
  * Radiance Cascades manager.
@@ -88,9 +89,6 @@ export class RadianceCascades {
         console.log(`Radiance Cascades configured: ${RadianceCascades.TOTAL_PROBES} Probes (resources deferred)`);
     }
 
-    /**
-     * Lazily allocate all heavy GPU resources on first enable.
-     */
     private ensureResources() {
         if (this._initialized) return;
         this._initialized = true;
@@ -109,14 +107,16 @@ export class RadianceCascades {
         this.rcAtlasBView = this.rcAtlasB.createView();
 
         this.traceLayout = this.createTraceLayout();
-        this.tracePipeline = device.createComputePipeline({
+        this.tracePipeline = pipelineCache.getComputePipeline(device, {
             label: "RC Trace Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.traceLayout] }),
             compute: { module: device.createShaderModule({ code: shaders.rcTraceSrc }), entryPoint: 'main' }
-        });
+        }, "RC_Trace");
 
         console.log(`Radiance Cascades initialized: ${RadianceCascades.TOTAL_PROBES} Probes, Atlas ${RadianceCascades.ATLAS_W}x${RadianceCascades.ATLAS_H}`);
     }
+
+    private uniformData = new ArrayBuffer(128);
 
     updateUniforms() {
         const spacing = [
@@ -125,7 +125,7 @@ export class RadianceCascades {
             (this.gridMax[2] - this.gridMin[2]) / (RadianceCascades.GRID_Z - 1),
         ];
 
-        const data = new ArrayBuffer(128);
+        const data = this.uniformData;
         const i32View = new Int32Array(data);
         const f32View = new Float32Array(data);
 

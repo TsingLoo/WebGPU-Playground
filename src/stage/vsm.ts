@@ -2,6 +2,7 @@ import { device } from '../renderer';
 import * as renderer from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
+import { pipelineCache } from '../engine/PipelineCache';
 
 /**
  * Virtual Shadow Map (VSM) Manager
@@ -187,14 +188,14 @@ export class VSM {
             ],
         });
 
-        this.clearPipeline = device.createComputePipeline({
+        this.clearPipeline = pipelineCache.getComputePipeline(device, {
             label: "VSM Clear Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.clearBindGroupLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "VSM Clear", code: shaders.vsmClearSrc }),
                 entryPoint: 'main',
             },
-        });
+        }, "VSM_Clear");
 
         // --- Mark Pages Pipeline ---
         this.markPagesBindGroupLayout = device.createBindGroupLayout({
@@ -207,14 +208,14 @@ export class VSM {
             ],
         });
 
-        this.markPagesPipeline = device.createComputePipeline({
+        this.markPagesPipeline = pipelineCache.getComputePipeline(device, {
             label: "VSM Mark Pages Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.markPagesBindGroupLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "VSM Mark Pages", code: shaders.vsmMarkPagesSrc }),
                 entryPoint: 'main',
             },
-        });
+        }, "VSM_MarkPages");
 
         // --- Allocate Pages Pipeline ---
         this.allocateBindGroupLayout = device.createBindGroupLayout({
@@ -227,14 +228,14 @@ export class VSM {
             ],
         });
 
-        this.allocatePagesPipeline = device.createComputePipeline({
+        this.allocatePagesPipeline = pipelineCache.getComputePipeline(device, {
             label: "VSM Allocate Pages Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.allocateBindGroupLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "VSM Allocate Pages", code: shaders.vsmAllocatePagesSrc }),
                 entryPoint: 'main',
             },
-        });
+        }, "VSM_AllocatePages");
     }
 
     private createShadowPipeline() {
@@ -246,7 +247,7 @@ export class VSM {
             ],
         });
 
-        this.shadowPipeline = device.createRenderPipeline({
+        this.shadowPipeline = pipelineCache.getRenderPipeline(device, {
             label: "VSM Shadow Pipeline",
             layout: device.createPipelineLayout({
                 bindGroupLayouts: [
@@ -272,7 +273,7 @@ export class VSM {
                 entryPoint: 'main',
                 targets: [],
             },
-        });
+        }, "VSM_Shadow");
     }
 
     /**
@@ -387,6 +388,8 @@ export class VSM {
         return vpMatrices;
     }
 
+    private uniformData = new ArrayBuffer(592);
+
     /**
      * Update VSM uniform buffer with current clipmap matrices and params.
      */
@@ -403,7 +406,7 @@ export class VSM {
         //   512..575:  mat4x4f inv_view_proj (64 bytes, 16 floats)
         //   576..591:  4 × u32 params (16 bytes, 4 ints)
         //   total = 592 bytes
-        const data = new ArrayBuffer(592);
+        const data = this.uniformData;
         const f32 = new Float32Array(data);
         const u32 = new Uint32Array(data);
 

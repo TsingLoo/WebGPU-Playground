@@ -12,7 +12,8 @@ import { mat4 } from 'wgpu-matrix';
 import { BVHData, buildBVHFromScene } from '../stage/bvh_builder';
 import { Entity } from './Entity';
 import { MeshRenderer } from './components/MeshRenderer';
-import { device, materialBindGroupLayout } from '../renderer';
+import { device, globalUniformPool, materialBindGroupLayout } from '../renderer';
+import { bindGroupAllocator } from './BindGroupAllocator';
 
 export function setupLoaders() {
     registerLoaders([GLTFLoader, ImageLoader]);
@@ -101,23 +102,23 @@ export class Material {
         const hasNormalTexture = (normalTexIndex != null && normalTexIndex < texturesLinear.length) ? 1.0 : 0.0;
 
 
-        // PBR params uniform: 48 bytes (3 vec4f)
-        // vec4f[0]: roughness, metallic, hasMRTexture, hasNormalTexture
-        // vec4f[1]: baseColorFactor
         // vec4f[2]: reserved
-        const pbrParamsBuffer = device.createBuffer({
-            label: "PBR params uniform",
-            size: 48,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        device.queue.writeBuffer(pbrParamsBuffer, 0, new Float32Array([
+        
+        // Allocate 48 bytes (3 vec4f). UniformPool handles 256-byte alignment internally if we set size carefully, 
+        // wait, UniformPool.allocate aligns by 256, so allocating 48 gives us a 256-stride chunk which is safe.
+        const poolAlloc = globalUniformPool.allocate(48);
+        poolAlloc.view.set([
             roughness, metallic, hasMRTexture, hasNormalTexture,
             baseColorFactor[0], baseColorFactor[1], baseColorFactor[2], baseColorFactor[3],
             0.0, 0.0, 0.0, 0.0
-        ]));
+        ]);
+        globalUniformPool.markDirty(poolAlloc.offset, poolAlloc.sizeBytes);
 
-        this.materialBindGroup = device.createBindGroup({
-            label: "material bind group",
+        // Compute a deterministic cache key for this material bind group
+        const cacheKey = `mat_${roughness.toFixed(2)}_${metallic.toFixed(2)}_${texIndex}_${mrTexIndex}_${normalTexIndex}_${baseColorFactor.join(',')}`;
+
+        this.materialBindGroup = bindGroupAllocator.getBindGroup(device, {
+            label: `material bind group ${materialId}`,
             layout: materialBindGroupLayout,
             entries: [
                 {
@@ -130,7 +131,11 @@ export class Material {
                 },
                 {
                     binding: 2,
-                    resource: { buffer: pbrParamsBuffer }
+                    resource: { 
+                        buffer: globalUniformPool.gpuBuffer,
+                        offset: poolAlloc.offset,
+                        size: poolAlloc.sizeBytes
+                    }
                 },
                 {
                     binding: 3,
@@ -149,7 +154,7 @@ export class Material {
                     resource: normalTexture.sampler
                 }
             ]
-        });
+        }, cacheKey);
     }
 }
 

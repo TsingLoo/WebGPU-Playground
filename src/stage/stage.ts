@@ -58,6 +58,8 @@ export class Stage {
         this.updateSunLight();
     }
 
+    private sunLightData = new Float32Array(32); // Pre-allocated array for GC optimization
+
     updateSunLight() {
         // Sync sun direction to VSM
         this.vsm.sunDirection = this.sunDirection;
@@ -66,7 +68,7 @@ export class Stage {
         const len = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
 
         // Write to GPU buffer: direction(16) + color(16) + light_vp(64) + shadow_params(16) + volumetric_params(16) = 128 bytes
-        const data = new Float32Array(32); // 128 / 4
+        const data = this.sunLightData;
         // direction.xyz, w=intensity
         data[0] = d[0] / len; data[1] = d[1] / len; data[2] = d[2] / len; data[3] = this.sunIntensity;
         // color.rgb, a=enabled
