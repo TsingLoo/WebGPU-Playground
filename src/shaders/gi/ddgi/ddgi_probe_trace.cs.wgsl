@@ -30,6 +30,7 @@ struct MaterialData {
 @group(0) @binding(16) var<storage, read> bvhUVs: array<vec4f>;
 @group(0) @binding(17) var baseColorTexArray: texture_2d_array<f32>;
 @group(0) @binding(18) var baseColorSampler: sampler;
+@group(0) @binding(19) var<storage, read> ddgiProbeData: array<vec4f>;
 
 const DDGI_RAYS_PER_PROBE: u32 = ${ddgiRaysPerProbe}u;
 const GOLDEN_RATIO: f32 = 1.618033988749895;
@@ -60,7 +61,17 @@ fn main(
     let pz = probeIndex / (gridX * gridY);
     let py = (probeIndex % (gridX * gridY)) / gridX;
     let px = probeIndex % gridX;
-    let probeWorldPos = ddgiProbePosition(vec3i(px, py, pz), ddgi);
+    
+    let pData = ddgiProbeData[probeIndex];
+    if (pData.w > 0.5) { // sleeping
+        // write debug/empty value or just return, returning leaves rayData un-updated,
+        // but we better write something so irradiance pass will know.
+        let outputIdx = u32(probeIndex) * DDGI_RAYS_PER_PROBE + rayIndex;
+        rayData[outputIdx] = vec4f(0.0, 0.0, 0.0, -1.0);
+        return;
+    }
+    
+    let probeWorldPos = ddgiProbePosition(vec3i(px, py, pz), ddgi) + pData.xyz;
 
     let baseDir = fibonacciSphereDir(rayIndex, DDGI_RAYS_PER_PROBE);
     let rotatedDir = normalize((randomRotation * vec4f(baseDir, 0.0)).xyz);

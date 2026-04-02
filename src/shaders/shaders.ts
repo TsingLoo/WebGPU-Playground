@@ -35,6 +35,7 @@ import ddgiProbeTraceRaw from './gi/ddgi/ddgi_probe_trace.cs.wgsl?raw';
 import ddgiIrradianceUpdateRaw from './gi/ddgi/ddgi_irradiance_update.cs.wgsl?raw';
 import ddgiVisibilityUpdateRaw from './gi/ddgi/ddgi_visibility_update.cs.wgsl?raw';
 import ddgiBorderUpdateRaw from './gi/ddgi/ddgi_border_update.cs.wgsl?raw';
+import ddgiProbeRelocateRaw from './gi/ddgi/ddgi_probe_relocate.cs.wgsl?raw';
 
 // Radiance Cascades
 import rcTraceRaw from './gi/radiance_cascades/rc_trace.cs.wgsl?raw';
@@ -172,8 +173,17 @@ const materials: Record<string, MaterialShaderDesc> = {
     'unlit': { materialEval: unlitMaterialSrc }
 };
 
+function injectMocks(rawCode: string, composed: string): string {
+    if (!rawCode.includes("ddgiProbeData")) {
+        return "var<private> ddgiProbeData: array<vec4f, 1>;\n" + composed;
+    }
+    return composed;
+}
+
 function processShaderRaw(raw: string) {
-    return commonSrc + giEvaluationSrc + evalShaderRaw(raw);
+    let evaled = evalShaderRaw(raw);
+    let gi = injectMocks(evaled, giEvaluationSrc + evaled).replace(evaled, ""); // Just get the injected part
+    return commonSrc + gi + evaled;
 }
 
 export const standardVertSrc: string = processShaderRaw(standardVertRaw);
@@ -201,13 +211,15 @@ export function buildForwardPlusShader(materialType: string, isOpaque: boolean):
     const matSrc = matDesc.materialEval;
     let raw = evalShaderRaw(forwardPlusFragRaw);
     if (isOpaque) raw = raw.replace(discardRegex, '');
-    return commonSrc + matSrc + lightingCompositeSrc + giEvaluationSrc + raw; 
+    let gi = injectMocks(raw, giEvaluationSrc + raw).replace(raw, "");
+    return commonSrc + matSrc + lightingCompositeSrc + gi + raw; 
 }
 
 export const fullscreenBlitVertSrc: string = processShaderRaw(fullscreenBlitVertRaw);
 export const fullscreenBlitFragSrc: string = processShaderRaw(fullscreenBlitFragRaw);
 
-export const clusteredDeferredComputeSrc: string = commonSrc + lightingCompositeSrc + giEvaluationSrc + evalShaderRaw(clusteredDeferredComputeSrcRaw);
+let clusteredRaw = evalShaderRaw(clusteredDeferredComputeSrcRaw);
+export const clusteredDeferredComputeSrc: string = commonSrc + lightingCompositeSrc + injectMocks(clusteredRaw, giEvaluationSrc + clusteredRaw).replace(clusteredRaw, "") + clusteredRaw;
 
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);
@@ -247,6 +259,7 @@ export const ddgiProbeTraceSrc: string = processShaderRaw(bvhSrc + ddgiProbeTrac
 export const ddgiIrradianceUpdateSrc: string = processShaderRaw(ddgiIrradianceUpdateRaw);
 export const ddgiVisibilityUpdateSrc: string = processShaderRaw(ddgiVisibilityUpdateRaw);
 export const ddgiBorderUpdateSrc: string = ddgiBorderUpdateRaw;
+export const ddgiProbeRelocateSrc: string = processShaderRaw(ddgiProbeRelocateRaw);
 
 // Radiance Cascades shaders
 export const rcTraceSrc: string = processShaderRaw(rcTraceRaw);

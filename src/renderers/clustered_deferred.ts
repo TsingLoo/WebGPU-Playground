@@ -104,7 +104,8 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, sampler: {} },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, sampler: {} }
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, sampler: {} },
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }
             ]
         });
 
@@ -185,7 +186,8 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 3, resource: this.stage.ddgi.ddgiSampler },
                 { binding: 4, resource: this.stage.radianceCascades.getCurrentIrradianceView() },
                 { binding: 5, resource: { buffer: this.stage.radianceCascades.rcUniformBuffer } },
-                { binding: 6, resource: this.stage.radianceCascades.rcSampler }
+                { binding: 6, resource: this.stage.radianceCascades.rcSampler },
+                { binding: 7, resource: { buffer: this.stage.ddgi.probeDataBuffer || this.dummyStorageBuffer } }
             ]
         });
         

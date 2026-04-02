@@ -30,8 +30,11 @@ fn evaluateDDGI(
             for (var dx = 0; dx < 2; dx++) {
                 let offset = vec3i(dx, dy, dz);
                 let gridIdx = clamp(baseIdx + offset, vec3i(0), ddgi.grid_count.xyz - vec3i(1));
-                let p_pos = ddgiProbePosition(gridIdx, ddgi);
                 let p_idx = ddgiProbeLinearIndex(gridIdx, ddgi);
+                let p_data = ddgiProbeData[p_idx];
+                if (p_data.w > 0.5) { continue; } // sleeping probe
+
+                let p_pos = ddgiProbePosition(gridIdx, ddgi) + p_data.xyz;
 
                 let p_dir = p_pos - biasedPos;
                 let p_dist = length(p_dir);

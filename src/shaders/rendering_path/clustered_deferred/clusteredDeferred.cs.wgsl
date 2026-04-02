@@ -22,6 +22,7 @@
 @group(1) @binding(4) var rcIrradianceAtlas: texture_2d<f32>;
 @group(1) @binding(5) var<uniform> rcParams: RCUniforms;
 @group(1) @binding(6) var rcSampler: sampler;
+@group(1) @binding(7) var<storage, read> ddgiProbeData: array<vec4f>;
 @group(${bindGroup_scene}) @binding(15) var<uniform> sunLight: SunLight;
 @group(${bindGroup_scene}) @binding(16) var vsmPhysAtlas: texture_depth_2d;
 @group(${bindGroup_scene}) @binding(17) var<storage, read> vsmPageTable: array<u32>;
