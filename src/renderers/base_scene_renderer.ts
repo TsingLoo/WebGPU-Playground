@@ -304,7 +304,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 this.stage.scene.globalMaterialBuffer,
                 this.stage.sunLightBuffer,
                 this.vsm.physicalAtlasView, 
-                this.vsm.vsmUniformBuffer
+                this.vsm.vsmUniformBuffer,
+                this.stage.scene.bvhData.uvBuffer,
+                this.stage.scene.baseColorTexArrayView,
             );
         }
         if (this.stage.radianceCascades.enabled) {

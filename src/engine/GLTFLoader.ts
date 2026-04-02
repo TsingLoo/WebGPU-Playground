@@ -167,6 +167,7 @@ export class Primitive {
     
     cpuPositions?: Float32Array;
     cpuIndices?: Uint32Array;
+    cpuUVs?: Float32Array;
 
     constructor(gltfPrim: GLTFMeshPrimitive, gltfWithBuffers: GLTFWithBuffers, material: Material) {
         this.material = material;
@@ -249,9 +250,10 @@ export class Primitive {
 
         this.numIndices = indicesArray.length;
         
-        // Save for CPU voxelization
+        // Save for CPU voxelization and BVH building
         this.cpuPositions = positionsArray;
         this.cpuIndices = indicesArray;
+        this.cpuUVs = new Float32Array(uvsArray);
     }
 }
 
@@ -376,13 +378,17 @@ export class GLTFResult {
     public voxelGrid: GPUTexture;
     public voxelGridView: GPUTextureView;
     public globalMaterialBuffer: GPUBuffer;
+    public baseColorTexArray: GPUTexture;
+    public baseColorTexArrayView: GPUTextureView;
     
-    constructor(root: Entity, bvh: BVHData, voxelGrid: GPUTexture, voxelGridView: GPUTextureView, globalMatBuf: GPUBuffer) {
+    constructor(root: Entity, bvh: BVHData, voxelGrid: GPUTexture, voxelGridView: GPUTextureView, globalMatBuf: GPUBuffer, baseColorTexArray: GPUTexture, baseColorTexArrayView: GPUTextureView) {
         this.rootEntity = root;
         this.bvhData = bvh;
         this.voxelGrid = voxelGrid;
         this.voxelGridView = voxelGridView;
         this.globalMaterialBuffer = globalMatBuf;
+        this.baseColorTexArray = baseColorTexArray;
+        this.baseColorTexArrayView = baseColorTexArrayView;
     }
 }
 
@@ -396,7 +402,7 @@ export async function loadGltf(filePath: string, params: GLTFLoaderParams = new 
     return processGltf(gltfWithBuffers, params);
 }
 
-function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult {
+async function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): Promise<GLTFResult> {
 
         const gltf = gltfWithBuffers.json;
 
@@ -458,6 +464,50 @@ function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult
             }
         }
 
+        // Build texture_2d_array from all baseColor images for DDGI probe trace
+        const TEX_ARRAY_SIZE = 256;
+        const numImages = gltfWithBuffers.images ? gltfWithBuffers.images.length : 0;
+        const texArrayLayerCount = Math.max(1, numImages); // At least 1 layer for dummy
+        
+        const baseColorTexArray = device.createTexture({
+            label: "BaseColor Texture Array",
+            size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, texArrayLayerCount],
+            format: 'rgba8unorm',
+            dimension: '2d',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        
+        // Upload each image resized to TEX_ARRAY_SIZE x TEX_ARRAY_SIZE
+        if (gltfWithBuffers.images) {
+            for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
+                const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
+                // Resize via createImageBitmap
+                const resized = await createImageBitmap(srcBitmap, {
+                    resizeWidth: TEX_ARRAY_SIZE,
+                    resizeHeight: TEX_ARRAY_SIZE,
+                    resizeQuality: 'medium',
+                });
+                device.queue.copyExternalImageToTexture(
+                    { source: resized },
+                    { texture: baseColorTexArray, origin: [0, 0, imgIdx] },
+                    { width: TEX_ARRAY_SIZE, height: TEX_ARRAY_SIZE }
+                );
+                resized.close();
+            }
+        }
+        
+        const baseColorTexArrayView = baseColorTexArray.createView({ dimension: '2d-array' });
+
+        // Build material → texture layer mapping
+        // gltf.textures[i].source → image index → layer in texture array
+        function getBaseColorImageLayer(gltfMat: any): number {
+            const texIdx = gltfMat.pbrMetallicRoughness?.baseColorTexture?.index;
+            if (texIdx == null || !gltf.textures || texIdx >= gltf.textures.length) return -1;
+            const source = gltf.textures[texIdx].source;
+            if (source == null || source < 0 || source >= numImages) return -1;
+            return source;
+        }
+
         let sceneMaterials: Material[] = [];
         let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 8); // 8 floats per material (32 bytes)
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
@@ -478,6 +528,7 @@ function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
+                let texLayer = getBaseColorImageLayer(gltfMaterial);
 
                 materialDataArray[i * 8 + 0] = baseColorFactor[0] ?? 1.0;
                 materialDataArray[i * 8 + 1] = baseColorFactor[1] ?? 1.0;
@@ -485,7 +536,8 @@ function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult
                 materialDataArray[i * 8 + 3] = baseColorFactor[3] ?? 1.0;
                 materialDataArray[i * 8 + 4] = roughness;
                 materialDataArray[i * 8 + 5] = metallic;
-                materialDataArray[i * 8 + 6] = 0.0; // pad
+                // Use bitwise cast: store i32 layer index as f32 bits
+                new Int32Array(materialDataArray.buffer, (i * 8 + 6) * 4, 1)[0] = texLayer;
                 materialDataArray[i * 8 + 7] = 0.0; // pad
             }
         }
@@ -559,7 +611,7 @@ function processGltf(gltfWithBuffers: any, params: GLTFLoaderParams): GLTFResult
         // Phase 2: Build World-Space Voxel Grid on CPU for Coarse Scene Tracing!
         const { voxelGrid, voxelGridView } = buildVoxelGrid(sceneRoot, params);
         
-        return new GLTFResult(sceneRoot, bvhData, voxelGrid, voxelGridView, globalMaterialBuffer);
+        return new GLTFResult(sceneRoot, bvhData, voxelGrid, voxelGridView, globalMaterialBuffer, baseColorTexArray, baseColorTexArrayView);
 }
 
 function buildVoxelGrid(rootEntity: Entity, params: GLTFLoaderParams): {voxelGrid: GPUTexture, voxelGridView: GPUTextureView} {

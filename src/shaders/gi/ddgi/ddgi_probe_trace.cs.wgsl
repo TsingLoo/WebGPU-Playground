@@ -27,6 +27,9 @@ struct MaterialData {
 @group(0) @binding(13) var<uniform> sunLight: SunLight;
 @group(0) @binding(14) var vsmPhysAtlas: texture_depth_2d;
 @group(0) @binding(15) var<uniform> vsmUniforms: VSMUniforms;
+@group(0) @binding(16) var<storage, read> bvhUVs: array<vec4f>;
+@group(0) @binding(17) var baseColorTexArray: texture_2d_array<f32>;
+@group(0) @binding(18) var baseColorSampler: sampler;
 
 const DDGI_RAYS_PER_PROBE: u32 = ${ddgiRaysPerProbe}u;
 const GOLDEN_RATIO: f32 = 1.618033988749895;
@@ -81,6 +84,26 @@ fn main(
         // Convert to properly outward-facing geometric normal
         let normal = normalize(hit.normal); 
         
+        // --- REAL TEXTURE COLOR SAMPLING ---
+        let uv0 = bvhUVs[hit.indices.x].xy;
+        let uv1 = bvhUVs[hit.indices.y].xy;
+        let uv2 = bvhUVs[hit.indices.z].xy;
+        let hitUV = uv0 * hit.barycoord.x + uv1 * hit.barycoord.y + uv2 * hit.barycoord.z;
+        
+        var surfaceColor = mat.baseColor.rgb; 
+        
+        // Material pad0 stores the texture layer as f32 bits. bitcast to i32.
+        let texLayer = bitcast<i32>(mat.pad0);
+        if (texLayer >= 0) {
+            let texColor = textureSampleLevel(baseColorTexArray, baseColorSampler, hitUV, texLayer, 0.0);
+            
+            // sRGB -> linear decode happens automatically via texture format if 'rgba8unorm-srgb' 
+            // but we created texture_2d_array as 'rgba8unorm' to match shader float bindings without hassle,
+            // so we must decode the sRGB texture color to linear properly here:
+            let linearTexColor = pow(texColor.rgb, vec3f(2.2));
+            surfaceColor = linearTexColor * mat.baseColor.rgb;
+        }
+        
         var hitLighting = vec3f(0.0);
         
         // Direct Sun evaluation
@@ -103,7 +126,7 @@ fn main(
         hitLighting += indirect;
 
         // Apply diffuse BRDF
-        hitRadiance = mat.baseColor.rgb * hitLighting / PI; 
+        hitRadiance = surfaceColor * hitLighting / PI; 
     }
 
     if (hitDist < 0.0) {
