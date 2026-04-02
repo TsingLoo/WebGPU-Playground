@@ -17,7 +17,7 @@ import { Scene } from './engine/Scene';
 import { Entity } from './engine/Entity';
 import { CameraComponent } from './engine/components/CameraComponent';
 import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
-import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent } from './engine/components/RenderSettingsComponent';
+import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
 import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
 import { Lights } from './stage/lights';
@@ -97,6 +97,33 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     const pointLightsComp = new PointLightComponent();
     pointLightsComp.intensity = Lights.lightIntensity;
     pointLightsEntity.addComponent(pointLightsComp);
+    
+    const plSettingsComp = new PointLightSettingsComponent();
+    let localSavedNumLights = 0; // State for toggling
+    Object.defineProperty(plSettingsComp, 'enabled', {
+        get: () => lights.numLights > 0,
+        set: (v) => {
+            if (v) {
+                lights.numLights = localSavedNumLights > 0 ? localSavedNumLights : 100;
+            } else {
+                localSavedNumLights = lights.numLights;
+                lights.numLights = 0;
+            }
+            lights.updateLightSetUniformNumLights();
+        },
+        enumerable: true
+    });
+    Object.defineProperty(plSettingsComp, 'count', {
+        get: () => lights.numLights,
+        set: (v) => {
+            if (v > 0) localSavedNumLights = v;
+            lights.numLights = v <= Lights.maxNumLights ? v : Lights.maxNumLights;
+            lights.updateLightSetUniformNumLights();
+        },
+        enumerable: true
+    });
+    pointLightsEntity.addComponent(plSettingsComp);
+
     targetScene.root.addChild(pointLightsEntity);
 
     // --- VSM Shadow Component ---
@@ -271,38 +298,15 @@ let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', re
 gui.add(avgStats, 'avgFPS_20s').name('Avg FPS (8s)').listen();
 
 // =========== Point Lights ===========
-const lightsFolder = gui.addFolder('Point Lights');
-
 const desiredMobileOptions = [5, 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1250, 1450, 1500];
 const desiredPCOptions = [1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3200, 3400, 3600, 3800, 4000, 4200, 4400, 4600, 4800, 5000, 6000, 7000, 8000];
 let desiredOptions = isMobileDevice ? desiredMobileOptions : desiredPCOptions;
 const safeOptions = desiredOptions.filter(count => count <= Lights.maxNumLights);
 safeOptions.push(desiredOptions[3]);
 safeOptions.sort((a, b) => a - b);
-
 // Toggle: saves/restores numLights
-let savedNumLights = lights.numLights;
-const pointLightToggle = { enabled: false };
 lights.numLights = 0;
 lights.updateLightSetUniformNumLights();
-
-const lightNumSlider = lightsFolder.add(lights, 'numLights').min(1).max(Lights.maxNumLights).step(1).name('Count').onChange(() => {
-    if (pointLightToggle.enabled) savedNumLights = lights.numLights;
-    lights.updateLightSetUniformNumLights();
-});
-
-lightsFolder.add(pointLightToggle, 'enabled').name('Enabled').onChange((val: boolean) => {
-    if (val) {
-        lights.numLights = savedNumLights;
-    } else {
-        savedNumLights = lights.numLights;
-        lights.numLights = 0;
-    }
-    lights.updateLightSetUniformNumLights();
-    lightNumSlider.updateDisplay();
-});
-
-lightsFolder.open();
 
 // =========== Stage ===========
 const stage = new Stage(scene, lights, camera, stats, environment);
@@ -415,7 +419,6 @@ const benchmarkController = {
         for (const lightCount of safeOptions) {
             lights.numLights = lightCount;
             lights.updateLightSetUniformNumLights();
-            lightNumSlider.updateDisplay();
 
             avgStats.avgFPS_20s = `Idling (${lightCount} lights)...`;
             await sleep(restTime);
@@ -521,7 +524,6 @@ modelFileInput.addEventListener('change', async (event) => {
         // Disable random point lights (designed for Sponza) to avoid color artifacts
         lights.numLights = 0;
         lights.updateLightSetUniformNumLights();
-        lightNumSlider.updateDisplay();
 
         if (renderModeController) {
             setRenderer(renderModeController.getValue());
