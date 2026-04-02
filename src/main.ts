@@ -14,6 +14,10 @@ import parseHdr from 'parse-hdr';
 import parseExr from 'parse-exr';
 
 import { Scene } from './engine/Scene';
+import { Entity } from './engine/Entity';
+import { CameraComponent } from './engine/components/CameraComponent';
+import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
+import { SceneTreeUI } from './engine/SceneTreeUI';
 import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
@@ -36,9 +40,64 @@ scene.voxelGridView = gltfResult.voxelGridView;
 scene.globalMaterialBuffer = gltfResult.globalMaterialBuffer;
 scene.root.updateWorldTransform();
 
+const sceneTreeUI = new SceneTreeUI();
+sceneTreeUI.setScene(scene);
+
+
+
 const camera = new Camera();
 const lights = new Lights(camera);
 const environment = new Environment();
+
+// --- Add helpers ---
+function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: Stage) {
+    const cameraEntity = new Entity("Main Camera");
+    const cameraComp = new CameraComponent();
+    cameraComp.camera = targetCamera;
+    cameraEntity.addComponent(cameraComp);
+    targetScene.root.addChild(cameraEntity);
+
+    const sunEntity = new Entity("Directional Light (Sun)");
+    const sunComp = new DirectionalLightComponent();
+    // Sync with stage object reference
+    sunComp.direction = stageObj.sunDirection;
+    sunComp.color = stageObj.sunColor;
+    
+    // Bind stage properties to the component
+    Object.defineProperty(sunComp, 'intensity', {
+        get: () => stageObj.sunIntensity,
+        set: (v) => stageObj.sunIntensity = v,
+        enumerable: true
+    });
+    sunEntity.addComponent(sunComp);
+    targetScene.root.addChild(sunEntity);
+
+    const volEntity = new Entity("Global Volume (Fog)");
+    const volComp = new VolumetricFogComponent();
+    const stageBindings = {
+        enabled: 'sunVolumetricEnabled',
+        intensity: 'sunVolumetricIntensity',
+        heightFalloff: 'sunVolumetricHeightFalloff',
+        heightScale: 'sunVolumetricHeightScale',
+        maxDist: 'sunVolumetricMaxDist',
+        steps: 'sunVolumetricSteps'
+    };
+    for (const [compKey, stageKey] of Object.entries(stageBindings)) {
+        Object.defineProperty(volComp, compKey, {
+            get: () => (stageObj as any)[stageKey],
+            set: (v) => (stageObj as any)[stageKey] = v,
+            enumerable: true
+        });
+    }
+    volEntity.addComponent(volComp);
+    targetScene.root.addChild(volEntity);
+
+    const pointLightsEntity = new Entity("Point Lights Manager");
+    const pointLightsComp = new PointLightComponent();
+    pointLightsComp.intensity = Lights.lightIntensity;
+    pointLightsEntity.addComponent(pointLightsComp);
+    targetScene.root.addChild(pointLightsEntity);
+}
 
 const stats = new Stats();
 
@@ -151,6 +210,7 @@ lightsFolder.open();
 
 // =========== Stage ===========
 const stage = new Stage(scene, lights, camera, stats, environment);
+addHelpersToScene(scene, camera, stage);
 
 var renderer: Renderer | undefined;
 
@@ -449,7 +509,9 @@ modelFileInput.addEventListener('change', async (event) => {
         newScene.voxelGridView = result.voxelGridView;
         newScene.globalMaterialBuffer = result.globalMaterialBuffer;
         newScene.root.updateWorldTransform();
+        addHelpersToScene(newScene, camera, stage);
         stage.scene = newScene;
+        sceneTreeUI.setScene(newScene);
 
         // Disable random point lights (designed for Sponza) to avoid color artifacts
         lights.numLights = 0;
@@ -474,46 +536,6 @@ const modelUploadController = {
 };
 toolsFolder.add(modelUploadController, 'loadModel').name('Load Model (.gltf/.glb)');
 
-// Sun Light controls
-const sunFolder = gui.addFolder('Sun Light');
-sunFolder.add(stage, 'sunEnabled').name('Enabled').onChange(() => {
-    stage.updateSunLight();
-});
-sunFolder.add(stage, 'sunIntensity', 0.0, 20.0).step(0.1).name('Intensity').onChange(() => {
-    stage.updateSunLight();
-});
-const volFolder = gui.addFolder('Volumetric Lighting');
-volFolder.add(stage, 'sunVolumetricEnabled').name('Enabled');
-volFolder.add(stage, 'sunVolumetricIntensity', 0.0, 0.1).step(0.001).name('Intensity').onChange(() => {
-    stage.updateSunLight();
-});
-volFolder.add(stage, 'sunVolumetricHeightFalloff', 0.0, 1.0).step(0.01).name('Height Falloff').onChange(() => {
-    stage.updateSunLight();
-});
-volFolder.add(stage, 'sunVolumetricHeightScale', 0.0, 10.0).step(0.1).name('Height Scale').onChange(() => {
-    stage.updateSunLight();
-});
-volFolder.add(stage, 'sunVolumetricMaxDist', 10.0, 300.0).step(1.0).name('Max Dist').onChange(() => {
-    stage.updateSunLight();
-});
-volFolder.add(stage, 'sunVolumetricSteps', 8, 256).step(1).name('Steps (Quality)').onChange(() => {
-    stage.updateSunLight();
-});
-volFolder.open();
-const sunDirProxy = { x: stage.sunDirection[0], y: stage.sunDirection[1], z: stage.sunDirection[2] };
-sunFolder.add(sunDirProxy, 'x', -1, 1).step(0.01).name('Dir X').onChange(() => {
-    stage.sunDirection = [sunDirProxy.x, sunDirProxy.y, sunDirProxy.z];
-    stage.updateSunLight();
-});
-sunFolder.add(sunDirProxy, 'y', -1, 1).step(0.01).name('Dir Y').onChange(() => {
-    stage.sunDirection = [sunDirProxy.x, sunDirProxy.y, sunDirProxy.z];
-    stage.updateSunLight();
-});
-sunFolder.add(sunDirProxy, 'z', -1, 1).step(0.01).name('Dir Z').onChange(() => {
-    stage.sunDirection = [sunDirProxy.x, sunDirProxy.y, sunDirProxy.z];
-    stage.updateSunLight();
-});
-sunFolder.open();
 
 // VSM Shadow controls
 const vsmFolder = gui.addFolder('Shadow (VSM)');

@@ -134,6 +134,7 @@ export abstract class Renderer {
     protected scene: Scene;
     protected lights: Lights;
     protected camera: Camera;
+    protected stage: Stage;
 
     protected stats: Stats;
 
@@ -144,6 +145,7 @@ export abstract class Renderer {
         this.scene = stage.scene;
         this.lights = stage.lights;
         this.camera = stage.camera;
+        this.stage = stage;
         this.stats = stage.stats;
 
         this.frameRequestId = requestAnimationFrame((t) => this.onFrame(t));
@@ -166,6 +168,9 @@ export abstract class Renderer {
 
         // Update scene: recompute transforms → upload MeshRenderer GPU buffers
         this.scene.update(deltaTime);
+
+        // UI-driven components sync: ensure GPU buffers like Sun Data are fresh
+        this.stage.updateSunLight();
 
         this.stats.begin();
 
