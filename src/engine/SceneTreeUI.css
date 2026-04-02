@@ -170,10 +170,6 @@
 }
 
 /* ─── Tree Node ─── */
-.stp-node {
-    /* nothing, just a container */
-}
-
 .stp-node-row {
     display: flex;
     align-items: center;
@@ -277,76 +273,30 @@
 }
 
 /* ─── Inspector (bottom section) ─── */
-.stp-inspector {
+.stp-inspector.tweakpane-wrapper {
     border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 10px 14px;
+    padding: 0; /* Let tweakpane define internal padding */
     flex-shrink: 0;
-    max-height: 200px;
+    max-height: 45vh; /* Larger max height to accommodate Tweakpane UI */
     overflow-y: auto;
-    background: rgba(255, 255, 255, 0.01);
+    overflow-x: hidden;
+    background: rgba(18, 18, 24, 0.4);
 }
 
-.stp-inspector::-webkit-scrollbar {
+.stp-inspector.tweakpane-wrapper::-webkit-scrollbar {
     width: 4px;
 }
 
-.stp-inspector::-webkit-scrollbar-thumb {
+.stp-inspector.tweakpane-wrapper::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.06);
     border-radius: 2px;
 }
 
-.stp-inspector-title {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #5a6070;
-    margin-bottom: 8px;
-    font-weight: 600;
+/* Tweakpane overrides (optional but helps match engine styling) */
+.tp-dfwv {
+    width: 100% !important; /* Force tweakpane to fill parent */
 }
 
-.stp-inspector-entity-name {
-    color: #e0e4ec;
-    font-size: 13px;
-    font-weight: 500;
-    margin-bottom: 6px;
-}
-
-.stp-inspector-section {
-    margin-bottom: 6px;
-}
-
-.stp-inspector-section-title {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 10.5px;
-    font-weight: 500;
-    margin-bottom: 3px;
-    padding: 3px 6px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.03);
-}
-
-.stp-inspector-row {
-    display: flex;
-    align-items: baseline;
-    padding: 1px 8px;
-    font-size: 10.5px;
-    gap: 6px;
-}
-
-.stp-inspector-key {
-    color: #5a6674;
-    min-width: 70px;
-    flex-shrink: 0;
-}
-
-.stp-inspector-value {
-    color: #a0a8b8;
-    font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', monospace;
-    font-size: 10px;
-    word-break: break-all;
-}
 
 /* ─── Highlight search matches ─── */
 .stp-highlight {

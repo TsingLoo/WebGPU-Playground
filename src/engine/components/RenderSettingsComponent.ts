@@ -66,9 +66,13 @@ export class RadianceCascadesComponent extends Component {
 
 export class PointLightSettingsComponent extends Component {
     public hideEnableInUI = true;
+    public localSavedNumLights = 0;
     public enabled: boolean = false;
     public count: number = 0;
-
+    
+    // Virtual properties to match how the stage object bindings work, but stage doesn't have these,
+    // actually RenderSchema does the data-binding. Wait, stageObj.lights doesn't have an `enabled` property!
+    // stageObj.lights just has `numLights`.
     public getUIOptions(): Record<string, any> {
         return {
             count: { min: 0, step: 1 }
