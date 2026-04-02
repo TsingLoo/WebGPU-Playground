@@ -76,6 +76,15 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     // VSM Shadow Component appended to Sun Entity
     const vsmComp = new VSMShadowComponent();
     applyComponentSchema(vsmComp, 'VSMShadowComponent', stageObj, globals);
+    // wire enabled to sunEnabled + trigger lighting sync
+    Object.defineProperty(vsmComp, 'enabled', { 
+        get: () => stageObj.sunEnabled, 
+        set: (v) => { 
+            stageObj.sunEnabled = v; 
+            stageObj.updateSunLight();
+        }, 
+        enumerable: true 
+    });
     Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
     Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
     sunEntity.addComponent(vsmComp);
