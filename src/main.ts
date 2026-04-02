@@ -17,6 +17,7 @@ import { Scene } from './engine/Scene';
 import { Entity } from './engine/Entity';
 import { CameraComponent } from './engine/components/CameraComponent';
 import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
+import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
 import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
 import { Lights } from './stage/lights';
@@ -97,6 +98,101 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     pointLightsComp.intensity = Lights.lightIntensity;
     pointLightsEntity.addComponent(pointLightsComp);
     targetScene.root.addChild(pointLightsEntity);
+
+    // --- VSM Shadow Component ---
+    const vsmComp = new VSMShadowComponent();
+    const vsmBindings = ['physAtlasSize', 'pageSize', 'numClipmapLevels', 'pagesPerLevelAxis'];
+    for (const key of vsmBindings) {
+        Object.defineProperty(vsmComp, key, {
+            get: () => (stageObj.vsm as any)[key],
+            set: (v) => {
+                (stageObj.vsm as any)[key] = v;
+                stageObj.vsm.recreate();
+                stageObj.updateSunLight();
+                if (typeof setRenderer !== 'undefined' && typeof renderModeController !== 'undefined') {
+                    setRenderer(renderModeController.getValue());
+                }
+            },
+            enumerable: true
+        });
+    }
+    Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
+    Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
+    sunEntity.addComponent(vsmComp);
+
+    // --- Global Illumination ---
+    const giEntity = new Entity("Global Illumination");
+    const giComp = new GIComponent();
+    Object.defineProperty(giComp, 'mode', {
+        get: () => {
+            if (stageObj.ddgi.enabled) return 'ddgi';
+            if (stageObj.radianceCascades.enabled) return 'rc';
+            return 'off';
+        },
+        set: (v) => {
+            stageObj.ddgi.enabled = (v === 'ddgi');
+            stageObj.radianceCascades.enabled = (v === 'rc');
+            stageObj.ddgi.updateUniforms();
+            stageObj.radianceCascades.updateUniforms();
+        },
+        enumerable: true
+    });
+    Object.defineProperty(giComp, 'showGIBounds', {
+        get: () => stageObj.showGIBounds,
+        set: (v) => { stageObj.showGIBounds = v; },
+        enumerable: true
+    });
+    giEntity.addComponent(giComp);
+
+    const ddgiComp = new DDGIComponent();
+    const ddgiKeys = ['irradianceHysteresis', 'visibilityHysteresis', 'probeTraceAmbient'];
+    for (const key of ddgiKeys) {
+        Object.defineProperty(ddgiComp, key, {
+            get: () => (stageObj.ddgi as any)[key],
+            set: (v) => { (stageObj.ddgi as any)[key] = v; stageObj.ddgi.updateUniforms(); },
+            enumerable: true
+        });
+    }
+    giEntity.addComponent(ddgiComp);
+
+    const rcComp = new RadianceCascadesComponent();
+    const rcKeys = ['intensity', 'ambient', 'hysteresis', 'debugMode'];
+    for (const key of rcKeys) {
+        Object.defineProperty(rcComp, key, {
+            get: () => (stageObj.radianceCascades as any)[key],
+            set: (v) => { (stageObj.radianceCascades as any)[key] = v; stageObj.radianceCascades.updateUniforms(); },
+            enumerable: true
+        });
+    }
+    const rcBoundsKeys = ['gridMin', 'gridMax'];
+    for (const key of rcBoundsKeys) {
+        Object.defineProperty(rcComp, key, {
+            get: () => (stageObj.radianceCascades as any)[key],
+            set: (v) => { (stageObj.radianceCascades as any)[key] = Array.from(v) as [number,number,number]; stageObj.radianceCascades.updateUniforms(); },
+            enumerable: true
+        });
+    }
+    giEntity.addComponent(rcComp);
+    targetScene.root.addChild(giEntity);
+
+    // --- Post Processing ---
+    const ppEntity = new Entity("Post Processing");
+    const ssaoComp = new SSAOComponent();
+    Object.defineProperty(ssaoComp, 'enabled', {
+        get: () => stageObj.ssao.enabled,
+        set: (v) => { stageObj.ssao.enabled = v; stageObj.ssao.updateUniforms(); },
+        enumerable: true
+    });
+    const ssaoKeys = ['radius', 'bias', 'power'];
+    for (const key of ssaoKeys) {
+        Object.defineProperty(ssaoComp, key, {
+            get: () => (stageObj.ssao as any)[key],
+            set: (v) => { (stageObj.ssao as any)[key] = v; stageObj.ssao.updateUniforms(); },
+            enumerable: true
+        });
+    }
+    ppEntity.addComponent(ssaoComp);
+    targetScene.root.addChild(ppEntity);
 }
 
 const stats = new Stats();
@@ -228,97 +324,6 @@ function setRenderer(mode: string) {
 }
 
 renderModeController.onChange(setRenderer);
-
-// ====== GLOBAL GI MODE ======
-const giModes = { Off: 'off', DDGI: 'ddgi', RadianceCascades: 'rc' };
-const currentGIMode = { mode: 'off' };
-gui.add(currentGIMode, 'mode', giModes).name('RT GI Mode').onChange((mode: string) => {
-    stage.ddgi.enabled = (mode === 'ddgi');
-    stage.radianceCascades.enabled = (mode === 'rc');
-    stage.ddgi.updateUniforms();
-    stage.radianceCascades.updateUniforms();
-});
-gui.add(stage, 'showGIBounds').name('Show GI Grid Bounds');
-
-// =========== Radiance Cascades ===========
-const rcFolder = gui.addFolder('Radiance Cascades');
-rcFolder.add(stage.radianceCascades, 'intensity', 0.0, 5.0).step(0.1).name('Intensity').onChange(() => {
-    stage.radianceCascades.updateUniforms();
-});
-rcFolder.add(stage.radianceCascades, 'ambient', 0.0, 1.0).step(0.01).name('Ambient').onChange(() => {
-    stage.radianceCascades.updateUniforms();
-});
-rcFolder.add(stage.radianceCascades, 'hysteresis', 0.0, 0.999).step(0.001).name('Hysteresis').onChange(() => {
-    stage.radianceCascades.updateUniforms();
-});
-const rcDebugModes = { Off: 0, 'Show GI Only': 1, 'Show Probe Atlas': 2 };
-rcFolder.add(stage.radianceCascades, 'debugMode', rcDebugModes).name('Debug Mode').onChange(() => {
-    stage.radianceCascades.updateUniforms();
-});
-
-// Grid bounds controls
-const gridBoundsFolder = rcFolder.addFolder('Grid Bounds');
-const gridProxy = {
-    minX: stage.radianceCascades.gridMin[0], minY: stage.radianceCascades.gridMin[1], minZ: stage.radianceCascades.gridMin[2],
-    maxX: stage.radianceCascades.gridMax[0], maxY: stage.radianceCascades.gridMax[1], maxZ: stage.radianceCascades.gridMax[2],
-};
-const updateGridBounds = () => {
-    stage.radianceCascades.gridMin = [gridProxy.minX, gridProxy.minY, gridProxy.minZ];
-    stage.radianceCascades.gridMax = [gridProxy.maxX, gridProxy.maxY, gridProxy.maxZ];
-    stage.radianceCascades.updateUniforms();
-};
-gridBoundsFolder.add(gridProxy, 'minX', -30, 0).step(0.5).name('Min X').onChange(updateGridBounds);
-gridBoundsFolder.add(gridProxy, 'minY', -5, 5).step(0.5).name('Min Y').onChange(updateGridBounds);
-gridBoundsFolder.add(gridProxy, 'minZ', -20, 0).step(0.5).name('Min Z').onChange(updateGridBounds);
-gridBoundsFolder.add(gridProxy, 'maxX', 0, 30).step(0.5).name('Max X').onChange(updateGridBounds);
-gridBoundsFolder.add(gridProxy, 'maxY', 3, 20).step(0.5).name('Max Y').onChange(updateGridBounds);
-gridBoundsFolder.add(gridProxy, 'maxZ', 0, 20).step(0.5).name('Max Z').onChange(updateGridBounds);
-
-rcFolder.open();
-
-// =========== DDGI ===========
-const ddgiFolder = gui.addFolder('DDGI');
-// ddgiFolder.add(stage.ddgi, 'debugMode', { Off: 0, Irradiance: 1, Visibility: 2 }).name('Debug Mode').onChange(() => { stage.ddgi.updateUniforms(); });
-ddgiFolder.add(stage.ddgi, 'irradianceHysteresis', 0.8, 0.999).step(0.001).name('Irr. Hysteresis').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'visibilityHysteresis', 0.8, 0.999).step(0.001).name('Vis. Hysteresis').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-ddgiFolder.add(stage.ddgi, 'probeTraceAmbient', 0.0, 1.0).step(0.01).name('Ambient Base').onChange(() => {
-    stage.ddgi.updateUniforms();
-});
-
-ddgiFolder.open();
-
-// =========== NRC (Neural Radiance Caching) ===========
-/*
-const nrcFolder = gui.addFolder('NRC (Neural Radiance Cache)');
-// ...
-*/
-
-// =========== Surfel GI (disabled) ===========
-// const surfelFolder = gui.addFolder('Surfel GI');
-// surfelFolder.add(stage.surfelGI, 'enabled').name('Enabled').listen().onChange((val: boolean) => {
-//     if (val) {
-//         stage.ddgi.enabled = false;
-//         stage.nrc.enabled = false;
-//         stage.ddgi.updateUniforms();
-//         stage.nrc.updateUniforms();
-//     }
-// });
-// surfelFolder.add(stage.surfelGI, 'debugMode').name('Debug Mode').listen();
-// surfelFolder.open();
-
-// =========== SSAO ===========
-const ssaoFolder = gui.addFolder('SSAO');
-ssaoFolder.add(stage.ssao, 'enabled').name('Enabled').listen().onChange(() => {
-    stage.ssao.updateUniforms();
-});
-ssaoFolder.add(stage.ssao, 'radius', 0.1, 5.0).step(0.1).name('Radius').onChange(() => { stage.ssao.updateUniforms(); });
-ssaoFolder.add(stage.ssao, 'bias', 0.0, 0.2).step(0.001).name('Bias').onChange(() => { stage.ssao.updateUniforms(); });
-ssaoFolder.add(stage.ssao, 'power', 0.1, 5.0).step(0.1).name('Power').onChange(() => { stage.ssao.updateUniforms(); });
-ssaoFolder.open();
 
 // =========== Helper functions (HDR / EXR parsing) ===========
 function parseHdrFile(buffer: ArrayBuffer): { rgbaData: Float32Array, width: number, height: number } {
@@ -537,45 +542,8 @@ const modelUploadController = {
 toolsFolder.add(modelUploadController, 'loadModel').name('Load Model (.gltf/.glb)');
 
 
-// VSM Shadow controls
-const vsmFolder = gui.addFolder('Shadow (VSM)');
-const vsmProxy = {
-    physAtlasSize: stage.vsm.physAtlasSize,
-    pageSize: stage.vsm.pageSize,
-    numClipmapLevels: stage.vsm.numClipmapLevels,
-    pagesPerLevelAxis: stage.vsm.pagesPerLevelAxis,
-    // Display-only derived values
-    get virtualSize() { return stage.vsm.virtualSize; },
-    get maxPhysPages() { return stage.vsm.maxPhysPages; },
-};
+setRenderer(renderModeController.getValue());
 
-vsmFolder.add(vsmProxy, 'physAtlasSize', [1024, 2048, 4096, 8192]).name('Atlas Size').onChange((v: number) => {
-    stage.vsm.physAtlasSize = v;
-    stage.vsm.recreate();
-    stage.updateSunLight();
-    setRenderer(renderModeController.getValue());
-});
-vsmFolder.add(vsmProxy, 'pageSize', [64, 128, 256]).name('Page Size').onChange((v: number) => {
-    stage.vsm.pageSize = v;
-    stage.vsm.recreate();
-    stage.updateSunLight();
-    setRenderer(renderModeController.getValue());
-});
-vsmFolder.add(vsmProxy, 'numClipmapLevels', 1, 8).step(1).name('Clipmap Levels').onChange((v: number) => {
-    stage.vsm.numClipmapLevels = v;
-    stage.vsm.recreate();
-    stage.updateSunLight();
-    setRenderer(renderModeController.getValue());
-});
-vsmFolder.add(vsmProxy, 'pagesPerLevelAxis', [32, 64, 128, 256]).name('Pages/Level Axis').onChange((v: number) => {
-    stage.vsm.pagesPerLevelAxis = v;
-    stage.vsm.recreate();
-    stage.updateSunLight();
-    setRenderer(renderModeController.getValue());
-});
-vsmFolder.add(vsmProxy, 'virtualSize').name('Virtual Size (px)').listen();
-vsmFolder.add(vsmProxy, 'maxPhysPages').name('Max Phys Pages').listen();
-vsmFolder.open();
 
 setRenderer(renderModeController.getValue());
 

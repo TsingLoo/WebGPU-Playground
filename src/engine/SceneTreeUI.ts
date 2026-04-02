@@ -52,7 +52,7 @@ export class SceneTreeUI {
 
     // Inspector dynamic elements
     private inspectorActiveEntity: Entity | null = null;
-    private updatableElements: { el: HTMLElement | HTMLInputElement, getVal: () => string | number | boolean | Float32Array }[] = [];
+    private updatableElements: { el: HTMLElement | HTMLInputElement | HTMLSelectElement, getVal: () => any }[] = [];
     private updateRAF: number = 0;
 
     // Track total counts
@@ -136,6 +136,8 @@ export class SceneTreeUI {
                             item.el.value = numVal.toFixed(3);
                         }
                     }
+                } else if (item.el instanceof HTMLSelectElement) {
+                    item.el.value = String(val);
                 } else if (val instanceof Float32Array) {
                     item.el.textContent = `${val[0].toFixed(2)}, ${val[1].toFixed(2)}, ${val[2].toFixed(2)}`;
                 } else {
@@ -436,7 +438,27 @@ export class SceneTreeUI {
                     row.className = 'stp-inspector-row';
                     row.innerHTML = `<span class="stp-inspector-key">${prop.key}</span>`;
                     
-                    if (prop.readonly || (typeof prop.initialValue !== 'number' && typeof prop.initialValue !== 'boolean' && !Array.isArray(prop.initialValue))) {
+
+                    if (prop.options && Array.isArray(prop.options)) {
+                        const select = document.createElement('select');
+                        select.className = 'stp-input';
+                        for (const opt of prop.options) {
+                            const option = document.createElement('option');
+                            const val = typeof opt === 'object' ? opt.value : opt;
+                            const label = typeof opt === 'object' ? opt.label : opt;
+                            option.value = String(val);
+                            option.textContent = String(label);
+                            if (val === prop.initialValue) option.selected = true;
+                            select.appendChild(option);
+                        }
+                        select.addEventListener('change', () => {
+                            let val: any = select.value;
+                            if (typeof prop.initialValue === 'number') val = parseFloat(val);
+                            if (prop.setVal) prop.setVal(val);
+                        });
+                        row.appendChild(select);
+                        if (prop.getVal) this.updatableElements.push({ el: select, getVal: prop.getVal });
+                    } else if (prop.readonly || (typeof prop.initialValue !== 'number' && typeof prop.initialValue !== 'boolean' && !Array.isArray(prop.initialValue))) {
                         const valSpan = document.createElement('span');
                         valSpan.className = 'stp-inspector-value';
                         valSpan.textContent = String(prop.initialValue);
@@ -571,14 +593,16 @@ export class SceneTreeUI {
         return input;
     }
 
-    private getComponentProperties(comp: Component): {key: string, initialValue: any, readonly?: boolean, min?: number, getVal?: () => any, setVal?: (v: any) => void, getArrVal?: (i: number) => any, setArrVal?: (i: number, v: any) => void}[] {
+    private getComponentProperties(comp: Component): {key: string, initialValue: any, readonly?: boolean, min?: number, options?: any[], getVal?: () => any, setVal?: (v: any) => void, getArrVal?: (i: number) => any, setArrVal?: (i: number, v: any) => void}[] {
         const props: any[] = [];
-        props.push({ 
-            key: 'enabled', 
-            initialValue: comp.enabled, 
-            getVal: () => comp.enabled,
-            setVal: (v: boolean) => comp.enabled = v
-        });
+        if (!(comp as any).hideEnableInUI) {
+            props.push({ 
+                key: 'enabled', 
+                initialValue: comp.enabled, 
+                getVal: () => comp.enabled,
+                setVal: (v: boolean) => comp.enabled = v
+            });
+        }
 
         if (comp instanceof MeshRenderer) {
             const mr = comp as MeshRenderer;
@@ -594,12 +618,24 @@ export class SceneTreeUI {
             // Generic property extraction for other components
             const descriptors = Object.getOwnPropertyDescriptors(comp);
             for (const [key, desc] of Object.entries(descriptors)) {
-                if (key === 'entity' || key === 'enabled') continue;
+                if (key === 'entity' || key === 'enabled' || key === 'hideEnableInUI') continue;
                 
                 const val = desc.get ? desc.get.call(comp) : desc.value;
                 if (typeof val === 'function') continue;
                 
-                if (typeof val === 'number' || typeof val === 'boolean') {
+
+                const uiOptions = comp.getUIOptions ? comp.getUIOptions() : {};
+                const options = uiOptions[key];
+
+                if (options && Array.isArray(options)) {
+                    props.push({
+                        key,
+                        initialValue: val,
+                        options,
+                        getVal: () => (comp as any)[key],
+                        setVal: (v: any) => (comp as any)[key] = v
+                    });
+                } else if (typeof val === 'number' || typeof val === 'boolean') {
                     props.push({
                         key,
                         initialValue: val,

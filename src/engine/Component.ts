@@ -3,6 +3,9 @@ import { Entity } from './Entity';
 export abstract class Component {
     public entity!: Entity;
     public enabled: boolean = true;
+    
+    // Optional UI options mapping property name to an array of valid selections
+    public getUIOptions?(): Record<string, any[]>;
 
     // Called when the component is added to the entity
     public onAwake(): void {}
