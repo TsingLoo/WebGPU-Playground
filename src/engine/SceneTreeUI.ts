@@ -343,13 +343,13 @@ export class SceneTreeUI {
         const transFolder = (this.inspectorPane as any).addFolder({ title: 'Transform' });
         
         const posProxy = {
-            get position() {
-                return { x: entity.localTransform[12], y: entity.localTransform[13], z: entity.localTransform[14] };
-            },
-            set position(v) {
-                entity.localTransform[12] = v.x;
-                entity.localTransform[13] = v.y;
-                entity.localTransform[14] = v.z;
+            position: {
+                get x() { return entity.localTransform[12]; },
+                set x(v) { entity.localTransform[12] = v; entity.setTransformDirty(); },
+                get y() { return entity.localTransform[13]; },
+                set y(v) { entity.localTransform[13] = v; entity.setTransformDirty(); },
+                get z() { return entity.localTransform[14]; },
+                set z(v) { entity.localTransform[14] = v; entity.setTransformDirty(); }
             }
         };
 
@@ -366,25 +366,25 @@ export class SceneTreeUI {
                     compFolder.addBinding(prop.obj, prop.key, { readonly: true, label: prop.key });
                 } else if (prop.isColorArray) {
                     const colorProxy = {
-                        get color() {
-                            return { r: (comp as any)[prop.key][0], g: (comp as any)[prop.key][1], b: (comp as any)[prop.key][2] };
-                        },
-                        set color(v: any) {
-                            (comp as any)[prop.key][0] = v.r;
-                            (comp as any)[prop.key][1] = v.g;
-                            (comp as any)[prop.key][2] = v.b;
+                        color: {
+                            get r() { return (comp as any)[prop.key][0]; },
+                            set r(v) { (comp as any)[prop.key][0] = v; },
+                            get g() { return (comp as any)[prop.key][1]; },
+                            set g(v) { (comp as any)[prop.key][1] = v; },
+                            get b() { return (comp as any)[prop.key][2]; },
+                            set b(v) { (comp as any)[prop.key][2] = v; }
                         }
                     };
                     addUndoableBinding(compFolder, colorProxy, 'color', { color: { type: 'float' }, label: prop.key });
                 } else if (prop.isVectorArray) {
                     const vecProxy = {
-                        get vector() {
-                            return { x: (comp as any)[prop.key][0], y: (comp as any)[prop.key][1], z: (comp as any)[prop.key][2] };
-                        },
-                        set vector(v: any) {
-                            (comp as any)[prop.key][0] = v.x;
-                            (comp as any)[prop.key][1] = v.y;
-                            (comp as any)[prop.key][2] = v.z;
+                        vector: {
+                            get x() { return (comp as any)[prop.key][0]; },
+                            set x(v) { (comp as any)[prop.key][0] = v; },
+                            get y() { return (comp as any)[prop.key][1]; },
+                            set y(v) { (comp as any)[prop.key][1] = v; },
+                            get z() { return (comp as any)[prop.key][2]; },
+                            set z(v) { (comp as any)[prop.key][2] = v; }
                         }
                     };
                     addUndoableBinding(compFolder, vecProxy, 'vector', { label: prop.key, ...prop.options });
