@@ -2,6 +2,8 @@ import { Entity } from './Entity';
 import { Scene } from './Scene';
 import { Component } from './Component';
 import { MeshRenderer } from './components/MeshRenderer';
+import { CommandManager } from './CommandManager';
+import { Pane } from 'tweakpane';
 import './SceneTreeUI.css';
 
 // ─── Icon SVGs ────────────────────────────────────────────────────────────────
@@ -16,7 +18,6 @@ const ICONS = {
     root: `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="3" r="2" stroke="#ce93d8" stroke-width="1.1" fill="none"/><line x1="7" y1="5" x2="7" y2="9" stroke="#ce93d8" stroke-width="1"/><line x1="3" y1="9" x2="11" y2="9" stroke="#ce93d8" stroke-width="1"/><line x1="3" y1="9" x2="3" y2="12" stroke="#ce93d8" stroke-width="1"/><line x1="7" y1="9" x2="7" y2="12" stroke="#ce93d8" stroke-width="1"/><line x1="11" y1="9" x2="11" y2="12" stroke="#ce93d8" stroke-width="1"/></svg>`,
 };
 
-// ─── Component type → icon mapping ────────────────────────────────────────────
 function getComponentIcon(comp: Component): string {
     const name = comp.constructor.name;
     if (name.includes('MeshRenderer')) return ICONS.mesh;
@@ -25,16 +26,8 @@ function getComponentIcon(comp: Component): string {
     return ICONS.component;
 }
 
-function getComponentColor(comp: Component): string {
-    const name = comp.constructor.name;
-    if (name.includes('MeshRenderer')) return '#4fc3f7';
-    if (name.includes('Light')) return '#ffd54f';
-    if (name.includes('Camera')) return '#81c784';
-    return '#b0bec5';
-}
 
 
-// ─── Main Class ───────────────────────────────────────────────────────────────
 export class SceneTreeUI {
     private scene: Scene | null = null;
     private panel: HTMLDivElement;
@@ -50,17 +43,16 @@ export class SceneTreeUI {
     private isOpen: boolean = true;
     private searchQuery: string = '';
 
-    // Inspector dynamic elements
-    private inspectorActiveEntity: Entity | null = null;
-    private updatableElements: { el: HTMLElement | HTMLInputElement | HTMLSelectElement, getVal: () => any }[] = [];
+
+    private inspectorPane: Pane | null = null;
     private updateRAF: number = 0;
 
-    // Track total counts
     private totalEntities: number = 0;
     private totalComponents: number = 0;
 
     constructor() {
-        // Toggle button
+        CommandManager.initialize();
+
         this.toggleBtn = document.createElement('button');
         this.toggleBtn.id = 'scene-tree-toggle';
         this.toggleBtn.innerHTML = '☰';
@@ -69,12 +61,10 @@ export class SceneTreeUI {
         this.toggleBtn.addEventListener('click', () => this.toggle());
         document.body.appendChild(this.toggleBtn);
 
-        // Panel
         this.panel = document.createElement('div');
         this.panel.id = 'scene-tree-panel';
         document.body.appendChild(this.panel);
 
-        // Header
         const header = document.createElement('div');
         header.className = 'stp-header';
         header.innerHTML = `
@@ -84,13 +74,12 @@ export class SceneTreeUI {
         this.panel.appendChild(header);
         this.statsEl = header.querySelector('.stp-stats') as HTMLSpanElement;
 
-        // Search
         const searchWrap = document.createElement('div');
         searchWrap.className = 'stp-search-wrap';
         this.searchInput = document.createElement('input');
         this.searchInput.className = 'stp-search';
         this.searchInput.type = 'text';
-        this.searchInput.placeholder = 'Search entities...';
+        this.searchInput.placeholder = 'Search...';
         this.searchInput.addEventListener('input', () => {
             this.searchQuery = this.searchInput.value.toLowerCase();
             this.rebuild();
@@ -98,60 +87,32 @@ export class SceneTreeUI {
         searchWrap.appendChild(this.searchInput);
         this.panel.appendChild(searchWrap);
 
-        // Tree container
         this.treeContainer = document.createElement('div');
         this.treeContainer.className = 'stp-tree-container';
         this.panel.appendChild(this.treeContainer);
 
-        // Inspector (bottom)
+        // This will be the tweakpane container
         this.inspector = document.createElement('div');
-        this.inspector.className = 'stp-inspector';
-        this.inspector.style.display = 'none';
+        this.inspector.className = 'stp-inspector tweakpane-wrapper';
         this.panel.appendChild(this.inspector);
 
-        // Footer
         this.footerEl = document.createElement('div');
         this.footerEl.className = 'stp-footer';
         this.panel.appendChild(this.footerEl);
 
-        // Start real-time inspector update loop
         this.updateLoop = this.updateLoop.bind(this);
         this.updateRAF = requestAnimationFrame(this.updateLoop);
     }
 
     private updateLoop() {
-        if (this.isOpen && this.inspectorActiveEntity) {
-            for (const item of this.updatableElements) {
-                // Skip updating if user is actively focused/typing
-                if (document.activeElement === item.el) continue;
-
-                const val = item.getVal();
-                if (item.el instanceof HTMLInputElement) {
-                    if (item.el.type === 'checkbox') {
-                        item.el.checked = val as boolean;
-                    } else if (item.el.type === 'number') {
-                        // Only update if difference is noticeable
-                        const numVal = val as number;
-                        const isInt = item.el.step && parseFloat(item.el.step) % 1 === 0;
-                        if (Math.abs(parseFloat(item.el.value) - numVal) > 0.0001) {
-                            item.el.value = isInt ? Math.round(numVal).toString() : numVal.toFixed(3);
-                        }
-                    }
-                } else if (item.el instanceof HTMLSelectElement) {
-                    item.el.value = String(val);
-                } else if (val instanceof Float32Array) {
-                    item.el.textContent = `${val[0].toFixed(2)}, ${val[1].toFixed(2)}, ${val[2].toFixed(2)}`;
-                } else {
-                    item.el.textContent = String(val);
-                }
-            }
+        if (this.isOpen && this.inspectorPane) {
+            (this.inspectorPane as any).refresh();
         }
         this.updateRAF = requestAnimationFrame(this.updateLoop);
     }
 
     public setScene(scene: Scene) {
         this.scene = scene;
-        // Expand root by default
         this.expandedSet.add(scene.root);
         this.rebuild();
     }
@@ -163,14 +124,10 @@ export class SceneTreeUI {
         this.toggleBtn.innerHTML = this.isOpen ? '☰' : '▶';
     }
 
-    /**
-     * Call this when scene structure changes to rebuild the tree.
-     */
     public refresh() {
         this.rebuild();
     }
 
-    // ─── Build the tree ───────────────────────────────────────────────────────
     private rebuild() {
         this.treeContainer.innerHTML = '';
         this.totalEntities = 0;
@@ -208,11 +165,9 @@ export class SceneTreeUI {
     private matchesSearch(entity: Entity): boolean {
         if (!this.searchQuery) return true;
         if (entity.name.toLowerCase().includes(this.searchQuery)) return true;
-        // Check component names
         for (const c of entity.getAllComponents()) {
             if (c.constructor.name.toLowerCase().includes(this.searchQuery)) return true;
         }
-        // Check if any descendant matches
         for (const child of entity.children) {
             if (this.matchesSearch(child)) return true;
         }
@@ -220,10 +175,7 @@ export class SceneTreeUI {
     }
 
     private buildEntityNode(entity: Entity, depth: number, isRoot: boolean = false): HTMLDivElement | null {
-        // Filter by search
-        if (this.searchQuery && !this.matchesSearch(entity)) {
-            return null;
-        }
+        if (this.searchQuery && !this.matchesSearch(entity)) return null;
 
         const node = document.createElement('div');
         node.className = 'stp-node';
@@ -231,23 +183,19 @@ export class SceneTreeUI {
         const hasChildren = entity.children.size > 0;
         const isExpanded = this.expandedSet.has(entity);
 
-        // If searching, auto-expand
         if (this.searchQuery && hasChildren) {
             this.expandedSet.add(entity);
         }
 
-        // ─── Row ──────────────────────────────────────────────────────────
         const row = document.createElement('div');
         row.className = 'stp-node-row';
         if (this.selectedEntity === entity) row.classList.add('selected');
 
-        // Indent
         const indent = document.createElement('span');
         indent.style.width = `${depth * 16 + 4}px`;
         indent.style.flexShrink = '0';
         row.appendChild(indent);
 
-        // Chevron
         const chevron = document.createElement('span');
         chevron.className = 'stp-chevron' + (hasChildren ? '' : ' empty');
         if (hasChildren) {
@@ -264,13 +212,11 @@ export class SceneTreeUI {
         }
         row.appendChild(chevron);
 
-        // Entity icon
         const icon = document.createElement('span');
         icon.className = 'stp-node-icon';
         if (isRoot) {
             icon.innerHTML = ICONS.root;
         } else {
-            // Use the primary component's icon, or generic entity icon
             const comps = entity.getAllComponents();
             if (comps.length > 0) {
                 icon.innerHTML = getComponentIcon(comps[0]);
@@ -280,7 +226,6 @@ export class SceneTreeUI {
         }
         row.appendChild(icon);
 
-        // Label
         const label = document.createElement('span');
         label.className = 'stp-node-label' + (isRoot ? ' root-label' : '');
         if (this.searchQuery && entity.name.toLowerCase().includes(this.searchQuery)) {
@@ -290,7 +235,6 @@ export class SceneTreeUI {
         }
         row.appendChild(label);
 
-        // Component badges
         const comps = entity.getAllComponents();
         if (comps.length > 0) {
             const badges = document.createElement('span');
@@ -305,7 +249,6 @@ export class SceneTreeUI {
             row.appendChild(badges);
         }
 
-        // Child count (if collapsed with children)
         if (hasChildren && !isExpanded) {
             const countBadge = document.createElement('span');
             countBadge.className = 'stp-children-count';
@@ -313,14 +256,12 @@ export class SceneTreeUI {
             row.appendChild(countBadge);
         }
 
-        // Click to select
         row.addEventListener('click', () => {
             this.selectedEntity = entity;
             this.rebuild();
             this.showInspector(entity);
         });
 
-        // Double click to toggle expand
         row.addEventListener('dblclick', (e) => {
             e.preventDefault();
             if (hasChildren) {
@@ -335,7 +276,6 @@ export class SceneTreeUI {
 
         node.appendChild(row);
 
-        // ─── Children ─────────────────────────────────────────────────────
         if (hasChildren && (isExpanded || this.searchQuery)) {
             for (const child of entity.children) {
                 const childEl = this.buildEntityNode(child, depth + 1);
@@ -357,324 +297,169 @@ export class SceneTreeUI {
         return `${before}<span class="stp-highlight">${match}</span>${after}`;
     }
 
-    // ─── Inspector Panel ──────────────────────────────────────────────────────
+    // ─── Tweakpane Inspector ──────────────────────────────────────────────────
     private showInspector(entity: Entity) {
-        this.inspectorActiveEntity = entity;
-        this.updatableElements = [];
-        this.inspector.style.display = 'block';
-        this.inspector.innerHTML = '';
-
-        // Title
-        const title = document.createElement('div');
-        title.className = 'stp-inspector-title';
-        title.textContent = 'Inspector';
-        this.inspector.appendChild(title);
-
-        // Entity name
-        const nameEl = document.createElement('div');
-        nameEl.className = 'stp-inspector-entity-name';
-        nameEl.textContent = entity.name;
-        this.inspector.appendChild(nameEl);
-
-        // Transform
-        const transformSection = document.createElement('div');
-        transformSection.className = 'stp-inspector-section';
-        transformSection.innerHTML = `
-            <div class="stp-inspector-section-title" style="color:#8e95a4;">Transform</div>
-        `;
-        
-        const posRow = document.createElement('div');
-        posRow.className = 'stp-inspector-row';
-        posRow.innerHTML = `<span class="stp-inspector-key">Position</span>`;
-        
-        const posVal = document.createElement('span');
-        posVal.className = 'stp-inspector-value';
-        // Use localTransform for edits instead of worldTransform
-        const lt = entity.localTransform;
-        posRow.appendChild(posVal);
-        transformSection.appendChild(posRow);
-        
-        this.updatableElements.push({
-            el: posVal,
-            getVal: () => new Float32Array([entity.worldTransform[12], entity.worldTransform[13], entity.worldTransform[14]])
-        });
-
-        // Add editable local position
-        const editRow = document.createElement('div');
-        editRow.className = 'stp-inspector-row';
-        editRow.innerHTML = `<span class="stp-inspector-key">Local Pos</span>`;
-        
-        const xInput = this.createNumberInput(lt[12], v => { lt[12] = v; entity.setTransformDirty(); });
-        const yInput = this.createNumberInput(lt[13], v => { lt[13] = v; entity.setTransformDirty(); });
-        const zInput = this.createNumberInput(lt[14], v => { lt[14] = v; entity.setTransformDirty(); });
-        
-        editRow.appendChild(xInput);
-        editRow.appendChild(yInput);
-        editRow.appendChild(zInput);
-        transformSection.appendChild(editRow);
-
-        this.updatableElements.push({ el: xInput, getVal: () => entity.localTransform[12] });
-        this.updatableElements.push({ el: yInput, getVal: () => entity.localTransform[13] });
-        this.updatableElements.push({ el: zInput, getVal: () => entity.localTransform[14] });
-
-        this.inspector.appendChild(transformSection);
-
-        // Components
-        const comps = entity.getAllComponents();
-        if (comps.length > 0) {
-            for (const comp of comps) {
-                const section = document.createElement('div');
-                section.className = 'stp-inspector-section';
-                
-                const color = getComponentColor(comp);
-                section.innerHTML = `
-                    <div class="stp-inspector-section-title" style="color:${color};">
-                        ${getComponentIcon(comp)} ${comp.constructor.name}
-                    </div>
-                `;
-
-                const props = this.getComponentProperties(comp);
-                for (const prop of props) {
-                    const row = document.createElement('div');
-                    row.className = 'stp-inspector-row';
-                    row.innerHTML = `<span class="stp-inspector-key">${prop.key}</span>`;
-                    
-
-                    if (prop.options && Array.isArray(prop.options)) {
-                        const select = document.createElement('select');
-                        select.className = 'stp-input';
-                        for (const opt of prop.options) {
-                            const option = document.createElement('option');
-                            const val = typeof opt === 'object' ? opt.value : opt;
-                            const label = typeof opt === 'object' ? opt.label : opt;
-                            option.value = String(val);
-                            option.textContent = String(label);
-                            if (val === prop.initialValue) option.selected = true;
-                            select.appendChild(option);
-                        }
-                        select.addEventListener('change', () => {
-                            let val: any = select.value;
-                            if (typeof prop.initialValue === 'number') val = parseFloat(val);
-                            if (prop.setVal) prop.setVal(val);
-                        });
-                        row.appendChild(select);
-                        if (prop.getVal) this.updatableElements.push({ el: select, getVal: prop.getVal });
-                    } else if (prop.readonly || (typeof prop.initialValue !== 'number' && typeof prop.initialValue !== 'boolean' && !Array.isArray(prop.initialValue))) {
-                        const valSpan = document.createElement('span');
-                        valSpan.className = 'stp-inspector-value';
-                        valSpan.textContent = String(prop.initialValue);
-                        row.appendChild(valSpan);
-                        if (prop.getVal) this.updatableElements.push({ el: valSpan, getVal: prop.getVal });
-                    } else if (typeof prop.initialValue === 'boolean') {
-                        const checkbox = document.createElement('input');
-                        checkbox.type = 'checkbox';
-                        checkbox.className = 'stp-input';
-                        checkbox.checked = prop.initialValue as boolean;
-                        checkbox.addEventListener('change', () => { if (prop.setVal) prop.setVal(checkbox.checked); });
-                        row.appendChild(checkbox);
-                        if (prop.getVal) this.updatableElements.push({ el: checkbox, getVal: prop.getVal });
-                    } else if (typeof prop.initialValue === 'number') {
-                        const numInput = this.createNumberInput(prop.initialValue as number, v => { if (prop.setVal) prop.setVal(v); }, prop.min, prop.step);
-                        row.appendChild(numInput);
-                        if (prop.getVal) this.updatableElements.push({ el: numInput, getVal: prop.getVal });
-                    } else if (Array.isArray(prop.initialValue)) {
-                        const arrWrapper = document.createElement('div');
-                        arrWrapper.style.display = 'flex';
-                        arrWrapper.style.gap = '2px';
-                        arrWrapper.style.flex = '1';
-                        
-                        const arr = prop.initialValue as any[];
-                        for (let i = 0; i < arr.length; i++) {
-                            if (typeof arr[i] === 'number') {
-                                const numInput = this.createNumberInput(arr[i], v => { if (prop.setArrVal) prop.setArrVal(i, v); }, prop.min, prop.step);
-                                numInput.style.minWidth = "0"; // allow shrinking
-                                arrWrapper.appendChild(numInput);
-                                if (prop.getArrVal) this.updatableElements.push({ el: numInput, getVal: () => prop.getArrVal!(i) });
-                            } else {
-                                const span = document.createElement('span');
-                                span.className = 'stp-inspector-value';
-                                span.textContent = String(arr[i]);
-                                arrWrapper.appendChild(span);
-                            }
-                        }
-                        row.appendChild(arrWrapper);
-                    }
-                    
-                    section.appendChild(row);
-                }
-
-                this.inspector.appendChild(section);
-            }
+        if (this.inspectorPane) {
+            this.inspectorPane.dispose();
         }
 
-        // Children info
-        if (entity.children.size > 0) {
-            const childSection = document.createElement('div');
-            childSection.className = 'stp-inspector-section';
-            childSection.innerHTML = `
-                <div class="stp-inspector-section-title" style="color:#7b8394;">Children (${entity.children.size})</div>
-            `;
-            const names = Array.from(entity.children).slice(0, 8).map(c => c.name);
-            if (entity.children.size > 8) names.push(`... +${entity.children.size - 8}`);
-            childSection.innerHTML += `
-                <div class="stp-inspector-row">
-                    <span class="stp-inspector-value">${names.join(', ')}</span>
-                </div>
-            `;
-            this.inspector.appendChild(childSection);
-        }
-    }
+        this.inspectorPane = new Pane({ container: this.inspector, title: entity.name });
 
-    private createNumberInput(val: number, onChange: (v: number) => void, min?: number, step: number = 0.1): HTMLInputElement {
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.step = String(step);
-        if (min !== undefined) input.min = String(min);
-        const formatVal = (v: number) => step % 1 === 0 ? Math.round(v).toString() : v.toFixed(3);
-        input.value = formatVal(val);
-        input.className = 'stp-input';
-        
-        // Hint that it can be dragged
-        input.style.cursor = 'ew-resize';
-
-        input.addEventListener('change', () => {
-            let v = parseFloat(input.value);
-            if (min !== undefined && v < min) v = min;
-            if (step % 1 === 0) v = Math.round(v);
-            input.value = formatVal(v);
-            onChange(v);
-        });
-        
-        // Prevent key events from bubbling up and moving the camera while typing
-        input.addEventListener('keydown', (e) => e.stopPropagation());
-        input.addEventListener('keyup', (e) => e.stopPropagation());
-
-        let isDragging = false;
-        let startX = 0;
-        let startVal = 0;
-
-        const onMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-            const deltaX = e.clientX - startX;
-            if (Math.abs(deltaX) > 2) {
-                // It is a real drag. Prevent selection.
-                input.blur(); // Remove focus to prevent text cursor interfering
-                document.body.style.userSelect = 'none';
-                document.body.style.cursor = 'ew-resize';
-                
-                let multiplier = step % 1 === 0 ? 0.5 : 0.02; // Default drag speed
-                if (e.shiftKey) multiplier *= 10;
-                if (e.altKey) multiplier *= 0.1;
-
-                let newVal = startVal + deltaX * multiplier;
-                if (min !== undefined && newVal < min) newVal = min;
-                if (step % 1 === 0) newVal = Math.round(newVal);
-                input.value = formatVal(newVal);
-                onChange(newVal);
-            }
-        };
-
-        const onMouseUp = () => {
-            if (isDragging) {
-                isDragging = false;
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
-                document.body.style.cursor = ''; // Restore global cursor
-                document.body.style.userSelect = ''; // Restore text selection
-            }
-        };
-
-        input.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return; // Only left click
-            isDragging = true;
-            startX = e.clientX;
-            startVal = parseFloat(input.value) || 0;
+        // Helper to add a Tweakpane binding that supports Undo/Redo
+        const addUndoableBinding = (folder: any, target: any, key: string, params: any = {}, onChangeCb?: () => void) => {
+            let initialValue = structuredClone(target[key]);
             
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-        });
+            const binding = folder.addBinding(target, key, params);
+            
+            binding.on('change', (ev: any) => {
+                if (onChangeCb) onChangeCb();
+                
+                // When dragging is finalized
+                if (ev.last) {
+                    const oldVal = structuredClone(initialValue);
+                    const newVal = structuredClone(ev.value);
+                    
+                    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+                        CommandManager.push({
+                            execute: () => {
+                                target[key] = structuredClone(newVal);
+                                if (onChangeCb) onChangeCb();
+                                if (this.inspectorPane) (this.inspectorPane as any).refresh();
+                            },
+                            undo: () => {
+                                target[key] = structuredClone(oldVal);
+                                if (onChangeCb) onChangeCb();
+                                if (this.inspectorPane) (this.inspectorPane as any).refresh();
+                            }
+                        });
+                    }
+                    initialValue = structuredClone(newVal);
+                }
+            });
+            return binding;
+        };
 
-        return input;
+        // 1. Transform
+        const transFolder = (this.inspectorPane as any).addFolder({ title: 'Transform' });
+        
+        const posProxy = {
+            get position() {
+                return { x: entity.localTransform[12], y: entity.localTransform[13], z: entity.localTransform[14] };
+            },
+            set position(v) {
+                entity.localTransform[12] = v.x;
+                entity.localTransform[13] = v.y;
+                entity.localTransform[14] = v.z;
+            }
+        };
+
+        addUndoableBinding(transFolder, posProxy, 'position', {}, () => entity.setTransformDirty());
+
+        // 2. Components
+        const comps = entity.getAllComponents();
+        for (const comp of comps) {
+            const compFolder = (this.inspectorPane as any).addFolder({ title: comp.constructor.name });
+            
+            const props = this.getComponentProperties(comp);
+            for (const prop of props) {
+                if (prop.readonly) {
+                    compFolder.addBinding(prop.obj, prop.key, { readonly: true, label: prop.key });
+                } else if (prop.isColorArray) {
+                    const colorProxy = {
+                        get color() {
+                            return { r: (comp as any)[prop.key][0], g: (comp as any)[prop.key][1], b: (comp as any)[prop.key][2] };
+                        },
+                        set color(v: any) {
+                            (comp as any)[prop.key][0] = v.r;
+                            (comp as any)[prop.key][1] = v.g;
+                            (comp as any)[prop.key][2] = v.b;
+                        }
+                    };
+                    addUndoableBinding(compFolder, colorProxy, 'color', { color: { type: 'float' }, label: prop.key });
+                } else if (prop.isVectorArray) {
+                    const vecProxy = {
+                        get vector() {
+                            return { x: (comp as any)[prop.key][0], y: (comp as any)[prop.key][1], z: (comp as any)[prop.key][2] };
+                        },
+                        set vector(v: any) {
+                            (comp as any)[prop.key][0] = v.x;
+                            (comp as any)[prop.key][1] = v.y;
+                            (comp as any)[prop.key][2] = v.z;
+                        }
+                    };
+                    addUndoableBinding(compFolder, vecProxy, 'vector', { label: prop.key, ...prop.options });
+                } else {
+                    addUndoableBinding(compFolder, prop.obj, prop.key, { ...prop.options, label: prop.key });
+                }
+            }
+        }
     }
 
-    private getComponentProperties(comp: Component): {key: string, initialValue: any, readonly?: boolean, min?: number, step?: number, options?: any[], getVal?: () => any, setVal?: (v: any) => void, getArrVal?: (i: number) => any, setArrVal?: (i: number, v: any) => void}[] {
+    private getComponentProperties(comp: Component): {obj: any, key: string, readonly?: boolean, options?: any, isColorArray?: boolean, isVectorArray?: boolean}[] {
         const props: any[] = [];
         if (!(comp as any).hideEnableInUI) {
-            props.push({ 
-                key: 'enabled', 
-                initialValue: comp.enabled, 
-                getVal: () => comp.enabled,
-                setVal: (v: boolean) => comp.enabled = v
-            });
+            props.push({ obj: comp, key: 'enabled' });
         }
 
         if (comp instanceof MeshRenderer) {
-            const mr = comp as MeshRenderer;
-            if (mr.mesh) {
-                props.push({ key: 'primitives', initialValue: mr.mesh.primitives.length, readonly: true });
-                const totalIndices = mr.mesh.primitives.reduce((sum, p) => sum + p.numIndices, 0);
-                props.push({ key: 'indices', initialValue: totalIndices.toLocaleString(), readonly: true });
+            if (comp.mesh) {
+                props.push({ obj: { primitives: comp.mesh.primitives.length }, key: 'primitives', readonly: true });
+                const totalIndices = comp.mesh.primitives.reduce((sum, p) => sum + p.numIndices, 0);
+                props.push({ obj: { indices: totalIndices.toLocaleString() }, key: 'indices', readonly: true });
             } else {
-                props.push({ key: 'mesh', initialValue: 'null', readonly: true });
+                props.push({ obj: { mesh: 'null' }, key: 'mesh', readonly: true });
             }
-            props.push({ key: 'gpu bound', initialValue: mr.modelBindGroup ? 'yes' : 'no', readonly: true });
+            props.push({ obj: { bound: comp.modelBindGroup ? 'yes' : 'no' }, key: 'bound', readonly: true });
         } else {
-            // Generic property extraction for other components
             const descriptors = Object.getOwnPropertyDescriptors(comp);
             for (const [key, desc] of Object.entries(descriptors)) {
                 if (key === 'entity' || key === 'enabled' || key === 'hideEnableInUI') continue;
                 
                 const val = desc.get ? desc.get.call(comp) : desc.value;
                 if (typeof val === 'function') continue;
-                
 
-                const uiOptions = comp.getUIOptions ? comp.getUIOptions() : {};
-                const options = uiOptions[key];
-
-                if (options && Array.isArray(options)) {
-                    props.push({
-                        key,
-                        initialValue: val,
-                        options,
-                        getVal: () => (comp as any)[key],
-                        setVal: (v: any) => (comp as any)[key] = v
-                    });
-                } else if (typeof val === 'number' || typeof val === 'boolean') {
-                    let min = (key === 'intensity' || key.toLowerCase().includes('color')) ? 0 : undefined;
-                    let step = undefined;
-                    if (options && typeof options === 'object' && !Array.isArray(options)) {
-                        if (options.min !== undefined) min = options.min;
-                        if (options.step !== undefined) step = options.step;
+                let isColorArray = false;
+                let isVectorArray = false;
+                if (Array.isArray(val) && val.length === 3 && val.every(v => typeof v === 'number')) {
+                    if (key.toLowerCase().includes('color')) {
+                        isColorArray = true;
+                    } else {
+                        isVectorArray = true;
                     }
-                    props.push({
-                        key,
-                        initialValue: val,
-                        min,
-                        step,
-                        getVal: () => (comp as any)[key],
-                        setVal: (v: any) => (comp as any)[key] = v
-                    });
+                }
+
+                if (desc.get && !desc.set) {
+                   props.push({ obj: comp, key, readonly: true });
                 } else if (val === undefined || val === null) {
-                    props.push({ key, initialValue: 'null', readonly: true });
-                } else if (Array.isArray(val) && val.every(v => typeof v === 'number')) {
-                    props.push({
-                        key,
-                        initialValue: val,
-                        readonly: false,
-                        min: (key === 'intensity' || key.toLowerCase().includes('color')) ? 0 : undefined,
-                        getArrVal: (i: number) => (comp as any)[key][i],
-                        setArrVal: (i: number, v: any) => (comp as any)[key][i] = v
-                    });
-                } else if (Array.isArray(val)) {
-                    props.push({ key, initialValue: `[${val.map((v: any) => String(v)).join(', ')}]`, readonly: true });
-                } else if (typeof desc.value === 'string') {
-                    props.push({ key, initialValue: desc.value, readonly: true });
-                } else if (typeof desc.value === 'object') {
-                    props.push({ key, initialValue: desc.value.constructor?.name ?? 'Object', readonly: true });
+                   props.push({ obj: { [key]: 'null' }, key, readonly: true });
+                } else if (Array.isArray(val) && !isColorArray && !isVectorArray) {
+                   props.push({ obj: { [key]: `[${val.join(', ')}]` }, key, readonly: true });
+                } else if (typeof desc.value === 'object' && !isColorArray && !isVectorArray) {
+                   props.push({ obj: { [key]: desc.value.constructor?.name ?? 'Object' }, key, readonly: true });
+                } else {
+                   const uiOptions = (comp as any).getUIOptions ? (comp as any).getUIOptions()[key] : undefined;
+                   const tpOpts: any = {};
+                   if (uiOptions && typeof uiOptions === 'object' && !Array.isArray(uiOptions)) {
+                       if (uiOptions.min !== undefined) tpOpts.min = uiOptions.min;
+                       if (uiOptions.step !== undefined) tpOpts.step = uiOptions.step;
+                       if (uiOptions.max !== undefined) tpOpts.max = uiOptions.max;
+                   } else if (uiOptions && Array.isArray(uiOptions)) {
+                       tpOpts.options = {};
+                       // Normalize {label, value} vs raw string array
+                       for (const o of uiOptions) {
+                           if (typeof o === 'object') tpOpts.options[o.label] = o.value;
+                           else tpOpts.options[String(o)] = o;
+                       }
+                   } else if (typeof val === 'number') {
+                       if (key === 'intensity' || key.toLowerCase().includes('color')) {
+                           tpOpts.min = 0;
+                       }
+                   }
+
+                   props.push({ obj: comp, key, options: tpOpts, isColorArray, isVectorArray });
                 }
             }
         }
-
         return props;
     }
 
@@ -682,7 +467,5 @@ export class SceneTreeUI {
         cancelAnimationFrame(this.updateRAF);
         this.panel.remove();
         this.toggleBtn.remove();
-        const style = document.getElementById('scene-tree-styles');
-        if (style) style.remove();
     }
 }

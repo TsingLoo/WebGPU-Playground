@@ -19,6 +19,7 @@ import { CameraComponent } from './engine/components/CameraComponent';
 import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
 import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
+import { applyComponentSchema } from './engine/RenderSchema';
 import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
@@ -52,6 +53,13 @@ const environment = new Environment();
 
 // --- Add helpers ---
 function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: Stage) {
+    // We pass globals containing elements that might be undefined at initialization time (like setRenderer)
+    // but the Schema will look them up dynamically when onUpdate is called.
+    const globals = {
+        get setRenderer() { return typeof setRenderer !== 'undefined' ? setRenderer : undefined; },
+        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; }
+    };
+
     const cameraEntity = new Entity("Main Camera");
     const cameraComp = new CameraComponent();
     cameraComp.camera = targetCamera;
@@ -60,36 +68,22 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
 
     const sunEntity = new Entity("Directional Light (Sun)");
     const sunComp = new DirectionalLightComponent();
-    // Sync with stage object reference
     sunComp.direction = stageObj.sunDirection;
     sunComp.color = stageObj.sunColor;
-    
-    // Bind stage properties to the component
-    Object.defineProperty(sunComp, 'intensity', {
-        get: () => stageObj.sunIntensity,
-        set: (v) => stageObj.sunIntensity = v,
-        enumerable: true
-    });
+    applyComponentSchema(sunComp, 'DirectionalLightComponent', stageObj, globals);
     sunEntity.addComponent(sunComp);
+
+    // VSM Shadow Component appended to Sun Entity
+    const vsmComp = new VSMShadowComponent();
+    applyComponentSchema(vsmComp, 'VSMShadowComponent', stageObj, globals);
+    Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
+    Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
+    sunEntity.addComponent(vsmComp);
     targetScene.root.addChild(sunEntity);
 
     const volEntity = new Entity("Global Volume (Fog)");
     const volComp = new VolumetricFogComponent();
-    const stageBindings = {
-        enabled: 'sunVolumetricEnabled',
-        intensity: 'sunVolumetricIntensity',
-        heightFalloff: 'sunVolumetricHeightFalloff',
-        heightScale: 'sunVolumetricHeightScale',
-        maxDist: 'sunVolumetricMaxDist',
-        steps: 'sunVolumetricSteps'
-    };
-    for (const [compKey, stageKey] of Object.entries(stageBindings)) {
-        Object.defineProperty(volComp, compKey, {
-            get: () => (stageObj as any)[stageKey],
-            set: (v) => (stageObj as any)[stageKey] = v,
-            enumerable: true
-        });
-    }
+    applyComponentSchema(volComp, 'VolumetricFogComponent', stageObj, globals);
     volEntity.addComponent(volComp);
     targetScene.root.addChild(volEntity);
 
@@ -99,14 +93,14 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     pointLightsEntity.addComponent(pointLightsComp);
     
     const plSettingsComp = new PointLightSettingsComponent();
-    let localSavedNumLights = 0; // State for toggling
+    // Special bindings for point lights count logic
     Object.defineProperty(plSettingsComp, 'enabled', {
         get: () => lights.numLights > 0,
         set: (v) => {
             if (v) {
-                lights.numLights = localSavedNumLights > 0 ? localSavedNumLights : 100;
+                lights.numLights = plSettingsComp.localSavedNumLights > 0 ? plSettingsComp.localSavedNumLights : 100;
             } else {
-                localSavedNumLights = lights.numLights;
+                plSettingsComp.localSavedNumLights = lights.numLights;
                 lights.numLights = 0;
             }
             lights.updateLightSetUniformNumLights();
@@ -116,36 +110,14 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     Object.defineProperty(plSettingsComp, 'count', {
         get: () => lights.numLights,
         set: (v) => {
-            if (v > 0) localSavedNumLights = v;
+            if (v > 0) plSettingsComp.localSavedNumLights = v;
             lights.numLights = v <= Lights.maxNumLights ? v : Lights.maxNumLights;
             lights.updateLightSetUniformNumLights();
         },
         enumerable: true
     });
     pointLightsEntity.addComponent(plSettingsComp);
-
     targetScene.root.addChild(pointLightsEntity);
-
-    // --- VSM Shadow Component ---
-    const vsmComp = new VSMShadowComponent();
-    const vsmBindings = ['physAtlasSize', 'pageSize', 'numClipmapLevels', 'pagesPerLevelAxis'];
-    for (const key of vsmBindings) {
-        Object.defineProperty(vsmComp, key, {
-            get: () => (stageObj.vsm as any)[key],
-            set: (v) => {
-                (stageObj.vsm as any)[key] = v;
-                stageObj.vsm.recreate();
-                stageObj.updateSunLight();
-                if (typeof setRenderer !== 'undefined' && typeof renderModeController !== 'undefined') {
-                    setRenderer(renderModeController.getValue());
-                }
-            },
-            enumerable: true
-        });
-    }
-    Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
-    Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
-    sunEntity.addComponent(vsmComp);
 
     // --- Global Illumination ---
     const giEntity = new Entity("Global Illumination");
@@ -164,60 +136,23 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
         },
         enumerable: true
     });
-    Object.defineProperty(giComp, 'showGIBounds', {
-        get: () => stageObj.showGIBounds,
-        set: (v) => { stageObj.showGIBounds = v; },
-        enumerable: true
-    });
+    applyComponentSchema(giComp, 'GIComponent', stageObj, globals);
     giEntity.addComponent(giComp);
 
+    // Add sub-components
     const ddgiComp = new DDGIComponent();
-    const ddgiKeys = ['irradianceHysteresis', 'visibilityHysteresis', 'probeTraceAmbient'];
-    for (const key of ddgiKeys) {
-        Object.defineProperty(ddgiComp, key, {
-            get: () => (stageObj.ddgi as any)[key],
-            set: (v) => { (stageObj.ddgi as any)[key] = v; stageObj.ddgi.updateUniforms(); },
-            enumerable: true
-        });
-    }
+    applyComponentSchema(ddgiComp, 'DDGIComponent', stageObj, globals);
     giEntity.addComponent(ddgiComp);
 
     const rcComp = new RadianceCascadesComponent();
-    const rcKeys = ['intensity', 'ambient', 'hysteresis', 'debugMode'];
-    for (const key of rcKeys) {
-        Object.defineProperty(rcComp, key, {
-            get: () => (stageObj.radianceCascades as any)[key],
-            set: (v) => { (stageObj.radianceCascades as any)[key] = v; stageObj.radianceCascades.updateUniforms(); },
-            enumerable: true
-        });
-    }
-    const rcBoundsKeys = ['gridMin', 'gridMax'];
-    for (const key of rcBoundsKeys) {
-        Object.defineProperty(rcComp, key, {
-            get: () => (stageObj.radianceCascades as any)[key],
-            set: (v) => { (stageObj.radianceCascades as any)[key] = Array.from(v) as [number,number,number]; stageObj.radianceCascades.updateUniforms(); },
-            enumerable: true
-        });
-    }
+    applyComponentSchema(rcComp, 'RadianceCascadesComponent', stageObj, globals);
     giEntity.addComponent(rcComp);
     targetScene.root.addChild(giEntity);
 
     // --- Post Processing ---
     const ppEntity = new Entity("Post Processing");
     const ssaoComp = new SSAOComponent();
-    Object.defineProperty(ssaoComp, 'enabled', {
-        get: () => stageObj.ssao.enabled,
-        set: (v) => { stageObj.ssao.enabled = v; stageObj.ssao.updateUniforms(); },
-        enumerable: true
-    });
-    const ssaoKeys = ['radius', 'bias', 'power'];
-    for (const key of ssaoKeys) {
-        Object.defineProperty(ssaoComp, key, {
-            get: () => (stageObj.ssao as any)[key],
-            set: (v) => { (stageObj.ssao as any)[key] = v; stageObj.ssao.updateUniforms(); },
-            enumerable: true
-        });
-    }
+    applyComponentSchema(ssaoComp, 'SSAOComponent', stageObj, globals);
     ppEntity.addComponent(ssaoComp);
     targetScene.root.addChild(ppEntity);
 }

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --open",
-    "build": "vite build && cp -r scenes/ dist/"
+    "build": "vite build && cp -r scenes/ dist/",
+    "gen-types": "node scripts/wgsl_scanner.js"
   },
   "devDependencies": {
     "@types/dat.gui": "^0.7.13",
@@ -13,7 +14,8 @@
     "@types/stats.js": "^0.17.3",
     "@webgpu/types": "^0.1.44",
     "typescript": "^5.2.2",
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "wgsl_reflect": "^1.2.3"
   },
   "dependencies": {
     "@loaders.gl/gltf": "^4.2.2",
@@ -25,6 +27,7 @@
     "stats.js": "^0.17.0",
     "three": "^0.183.2",
     "three-mesh-bvh": "^0.9.9",
+    "tweakpane": "^4.0.5",
     "wgpu-matrix": "^3.0.2"
   }
 }
