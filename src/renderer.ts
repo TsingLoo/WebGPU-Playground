@@ -3,6 +3,8 @@ import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
 import { Stage } from './stage/stage';
 
+import { UniformPool } from './engine/UniformPool';
+
 export var canvas: HTMLCanvasElement;
 export var canvasFormat: GPUTextureFormat;
 export var context: GPUCanvasContext;
@@ -14,6 +16,8 @@ export const fovYDegrees = 45;
 
 export var modelBindGroupLayout: GPUBindGroupLayout;
 export var materialBindGroupLayout: GPUBindGroupLayout;
+
+export var globalUniformPool: UniformPool;
 
 export async function initWebGPU() {
     canvas = document.getElementById("mainCanvas") as HTMLCanvasElement;
@@ -50,6 +54,9 @@ export async function initWebGPU() {
     });
 
     console.log("WebGPU init successsful");
+    
+    // Allocate a generous 16MB for the singleton uniform pool
+    globalUniformPool = new UniformPool(device, 16 * 1024 * 1024);
 
     modelBindGroupLayout = device.createBindGroupLayout({
         label: "model bind group layout",
@@ -171,6 +178,9 @@ export abstract class Renderer {
 
         // UI-driven components sync: ensure GPU buffers like Sun Data are fresh
         this.stage.updateSunLight();
+
+        // Sync pooled dirty regions to the GPU
+        globalUniformPool.syncToGPU(device);
 
         this.stats.begin();
 

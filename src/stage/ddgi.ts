@@ -3,6 +3,7 @@ import * as shaders from '../shaders/shaders';
 import { Camera } from './camera';
 import { Environment } from './environment';
 import { BVHData } from './bvh_builder';
+import { pipelineCache } from '../engine/PipelineCache';
 
 /**
  * DDGI (Dynamic Diffuse Global Illumination) manager.
@@ -198,41 +199,41 @@ export class DDGI {
         this.visibilityUpdateLayout = this.createVisibilityUpdateLayout();
         this.borderUpdateLayout = this.createBorderUpdateLayout();
 
-        this.probeTracePipeline = device.createComputePipeline({
+        this.probeTracePipeline = pipelineCache.getComputePipeline(device, {
             label: "DDGI Probe Trace Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.probeTraceLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "DDGI Probe Trace", code: shaders.ddgiProbeTraceSrc }),
                 entryPoint: 'main'
             }
-        });
+        }, "DDGI_ProbeTrace");
 
-        this.irradianceUpdatePipeline = device.createComputePipeline({
+        this.irradianceUpdatePipeline = pipelineCache.getComputePipeline(device, {
             label: "DDGI Irradiance Update Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.irradianceUpdateLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "DDGI Irradiance Update", code: shaders.ddgiIrradianceUpdateSrc }),
                 entryPoint: 'main'
             }
-        });
+        }, "DDGI_IrrUpdate");
 
-        this.visibilityUpdatePipeline = device.createComputePipeline({
+        this.visibilityUpdatePipeline = pipelineCache.getComputePipeline(device, {
             label: "DDGI Visibility Update Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.visibilityUpdateLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "DDGI Visibility Update", code: shaders.ddgiVisibilityUpdateSrc }),
                 entryPoint: 'main'
             }
-        });
+        }, "DDGI_VisUpdate");
 
-        this.borderUpdateIrrPipeline = device.createComputePipeline({
+        this.borderUpdateIrrPipeline = pipelineCache.getComputePipeline(device, {
             label: "DDGI Border Update Irradiance Pipeline",
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.borderUpdateLayout] }),
             compute: {
                 module: device.createShaderModule({ label: "DDGI Border Update Irr", code: shaders.ddgiBorderUpdateSrc }),
                 entryPoint: 'main'
             }
-        });
+        }, "DDGI_BorderIrr");
 
         // For visibility border, we need a separate pipeline with rg16float format
         this.borderUpdateVisPipeline = this.borderUpdateIrrPipeline; // Reuse — format difference handled via bind group
@@ -242,6 +243,9 @@ export class DDGI {
         console.log(`  Visibility atlas: ${DDGI.VIS_ATLAS_W}x${DDGI.VIS_ATLAS_H}`);
     }
 
+    private uniformData = new ArrayBuffer(128);
+    private rotMatData = new Float32Array(16);
+
     updateUniforms() {
         const spacing = [
             (this.gridMax[0] - this.gridMin[0]) / (DDGI.GRID_X - 1),
@@ -249,7 +253,7 @@ export class DDGI {
             (this.gridMax[2] - this.gridMin[2]) / (DDGI.GRID_Z - 1),
         ];
 
-        const data = new ArrayBuffer(128);
+        const data = this.uniformData;
         const i32View = new Int32Array(data);
         const f32View = new Float32Array(data);
 
@@ -321,12 +325,11 @@ export class DDGI {
         const x = axis[0], y = axis[1], z = axis[2];
 
         // Column-major rotation matrix (mat4x4)
-        const rotMat = new Float32Array([
-            t * x * x + c,     t * x * y + s * z, t * x * z - s * y, 0,
-            t * x * y - s * z, t * y * y + c,     t * y * z + s * x, 0,
-            t * x * z + s * y, t * y * z - s * x, t * z * z + c,     0,
-            0, 0, 0, 1
-        ]);
+        const rotMat = this.rotMatData;
+        rotMat[0] = t * x * x + c;     rotMat[1] = t * x * y + s * z; rotMat[2] = t * x * z - s * y; rotMat[3] = 0;
+        rotMat[4] = t * x * y - s * z; rotMat[5] = t * y * y + c;     rotMat[6] = t * y * z + s * x; rotMat[7] = 0;
+        rotMat[8] = t * x * z + s * y; rotMat[9] = t * y * z - s * x; rotMat[10] = t * z * z + c;    rotMat[11] = 0;
+        rotMat[12] = 0; rotMat[13] = 0; rotMat[14] = 0; rotMat[15] = 1;
 
         device.queue.writeBuffer(this.randomRotationBuffer, 0, rotMat);
     }

@@ -51,8 +51,13 @@ export class SSAO {
         this.updateUniforms();
     }
     
+    private uniformData = new Float32Array(4);
+
     updateUniforms() {
-        const data = new Float32Array([this.radius, this.bias, this.power, this.enabled ? 1.0 : 0.0]);
-        device.queue.writeBuffer(this.uniformsBuffer, 0, data.buffer);
+        this.uniformData[0] = this.radius;
+        this.uniformData[1] = this.bias;
+        this.uniformData[2] = this.power;
+        this.uniformData[3] = this.enabled ? 1.0 : 0.0;
+        device.queue.writeBuffer(this.uniformsBuffer, 0, this.uniformData.buffer);
     }
 }
