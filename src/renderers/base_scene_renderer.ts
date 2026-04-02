@@ -30,6 +30,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
     dummyTextureView: GPUTextureView;
     dummyBuffer: GPUBuffer;
+    dummyStorageBuffer: GPUBuffer;
 
     zPrepassPipelineCache = new Map<string, GPURenderPipeline>();
     geometryPipelineCache = new Map<string, GPURenderPipeline>();
@@ -66,6 +67,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.dummyTextureView = dummyTex.createView();
         this.dummyBuffer = renderer.device.createBuffer({
             size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        this.dummyStorageBuffer = renderer.device.createBuffer({
+            size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
 
         // Depth buffer

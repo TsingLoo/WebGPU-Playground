@@ -62,6 +62,7 @@ export class DDGI {
     private pingPong = 0;
 
     rayDataBuffer!: GPUBuffer;
+    probeDataBuffer!: GPUBuffer;
     ddgiUniformBuffer: GPUBuffer;
     randomRotationBuffer!: GPUBuffer;
 
@@ -73,12 +74,14 @@ export class DDGI {
     visibilityUpdatePipeline!: GPUComputePipeline;
     borderUpdateIrrPipeline!: GPUComputePipeline;
     borderUpdateVisPipeline!: GPUComputePipeline;
+    relocatePipeline!: GPUComputePipeline;
 
     // Bind group layouts (lazily created)
     probeTraceLayout!: GPUBindGroupLayout;
     irradianceUpdateLayout!: GPUBindGroupLayout;
     visibilityUpdateLayout!: GPUBindGroupLayout;
     borderUpdateLayout!: GPUBindGroupLayout;
+    relocateLayout!: GPUBindGroupLayout;
 
     // Border params (lazily created)
     borderIrrParamsBuffer!: GPUBuffer;
@@ -165,6 +168,14 @@ export class DDGI {
             usage: GPUBufferUsage.STORAGE,
         });
 
+        // Probe data buffer: offset.xyz, state.w
+        this.probeDataBuffer = device.createBuffer({
+            label: "DDGI Probe Data",
+            size: DDGI.TOTAL_PROBES * 16,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        // Initialized to 0 automatically (no offsets, active state)
+
         // Random rotation matrix buffer (mat4x4f = 64 bytes)
         this.randomRotationBuffer = device.createBuffer({
             label: "DDGI Random Rotation",
@@ -225,6 +236,16 @@ export class DDGI {
                 entryPoint: 'main'
             }
         }, "DDGI_VisUpdate");
+
+        this.relocateLayout = this.createRelocateLayout();
+        this.relocatePipeline = pipelineCache.getComputePipeline(device, {
+            label: "DDGI Probe Relocate Pipeline",
+            layout: device.createPipelineLayout({ bindGroupLayouts: [this.relocateLayout] }),
+            compute: {
+                module: device.createShaderModule({ label: "DDGI Probe Relocate", code: shaders.ddgiProbeRelocateSrc }),
+                entryPoint: 'main'
+            }
+        }, "DDGI_ProbeRelocate");
 
         this.borderUpdateIrrPipeline = pipelineCache.getComputePipeline(device, {
             label: "DDGI Border Update Irradiance Pipeline",
@@ -357,6 +378,7 @@ export class DDGI {
                 { binding: 16, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvhUVs
                 { binding: 17, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // baseColor tex array
                 { binding: 18, visibility: GPUShaderStage.COMPUTE, sampler: {} },                     // baseColor sampler
+                { binding: 19, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // probeData
             ]
         });
     }
@@ -370,6 +392,7 @@ export class DDGI {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // ray data
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }, // read atlas
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } }, // write atlas
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // probeData
             ]
         });
     }
@@ -401,6 +424,18 @@ export class DDGI {
     /**
      * Dispatches all DDGI compute passes: probe trace, irradiance update, visibility update, border copy.
      */
+    private createRelocateLayout(): GPUBindGroupLayout {
+        return device.createBindGroupLayout({
+            label: "DDGI Probe Relocate Layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+            ]
+        });
+    }
+
     update(
         encoder: GPUCommandEncoder,
         bvhData: BVHData,
@@ -454,6 +489,7 @@ export class DDGI {
                 { binding: 16, resource: { buffer: bvhUVBuffer } },
                 { binding: 17, resource: baseColorTexArrayView },
                 { binding: 18, resource: baseColorSampler },
+                { binding: 19, resource: { buffer: this.probeDataBuffer } },
             ]
         });
 
@@ -463,7 +499,24 @@ export class DDGI {
         tracePass.dispatchWorkgroups(1, DDGI.TOTAL_PROBES, 1);
         tracePass.end();
 
-        // 2. Irradiance Update
+        // 2. Probe Relocate
+        const relocateBindGroup = device.createBindGroup({
+            layout: this.relocateLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.ddgiUniformBuffer } },
+                { binding: 1, resource: { buffer: this.randomRotationBuffer } },
+                { binding: 2, resource: { buffer: this.rayDataBuffer } },
+                { binding: 3, resource: { buffer: this.probeDataBuffer } },
+            ]
+        });
+
+        const relocatePass = encoder.beginComputePass({ label: "DDGI Probe Relocate Pass" });
+        relocatePass.setPipeline(this.relocatePipeline);
+        relocatePass.setBindGroup(0, relocateBindGroup);
+        relocatePass.dispatchWorkgroups(Math.ceil(DDGI.TOTAL_PROBES / 64));
+        relocatePass.end();
+
+        // 3. Irradiance Update
         const irrBindGroup = device.createBindGroup({
             layout: this.irradianceUpdateLayout,
             entries: [
@@ -472,6 +525,7 @@ export class DDGI {
                 { binding: 2, resource: { buffer: this.rayDataBuffer } },
                 { binding: 3, resource: readIrr },
                 { binding: 4, resource: writeIrr },
+                { binding: 5, resource: { buffer: this.probeDataBuffer } },
             ]
         });
 

@@ -82,7 +82,8 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+                { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+                { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } }
             ]
         });
 
@@ -113,7 +114,8 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 { binding: 3, resource: this.stage.ddgi.ddgiSampler },
                 { binding: 4, resource: this.stage.radianceCascades.getCurrentIrradianceView() },
                 { binding: 5, resource: { buffer: this.stage.radianceCascades.rcUniformBuffer } },
-                { binding: 6, resource: this.stage.radianceCascades.rcSampler }
+                { binding: 6, resource: this.stage.radianceCascades.rcSampler },
+                { binding: 7, resource: { buffer: this.stage.ddgi.probeDataBuffer || this.dummyStorageBuffer } }
             ]
         });
         

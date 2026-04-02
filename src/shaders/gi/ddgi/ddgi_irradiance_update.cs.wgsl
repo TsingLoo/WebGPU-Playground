@@ -6,6 +6,7 @@
 @group(0) @binding(2) var<storage, read> rayData: array<vec4f>;
 @group(0) @binding(3) var irradianceAtlasRead: texture_2d<f32>;
 @group(0) @binding(4) var irradianceAtlasWrite: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var<storage, read> probeData: array<vec4f>;
 
 const DDGI_RAYS_PER_PROBE: u32 = ${ddgiRaysPerProbe}u;
 const IRRADIANCE_TEXELS: u32 = ${ddgiIrradianceTexels}u;
@@ -43,6 +44,24 @@ fn main(
         (f32(texelY) + 0.5) / f32(IRRADIANCE_TEXELS)
     );
 
+    let probesPerRow = ddgi.grid_count.x;
+    let probeRow = probeIndex / probesPerRow;
+    let probeCol = probeIndex % probesPerRow;
+
+    let dstPixel = vec2i(
+        probeCol * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelX),
+        probeRow * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelY)
+    );
+
+    let pData = probeData[probeIndex];
+    if (pData.w > 0.5) { // sleeping
+        // If asleep, keep whatever is in the old atlas, or just output 0.
+        // Copying old atlas lets it gracefully ignore updates.
+        let oldColor = textureLoad(irradianceAtlasRead, dstPixel, 0);
+        textureStore(irradianceAtlasWrite, dstPixel, oldColor);
+        return;
+    }
+
     // Decode to world-space direction
     let texelDir = octDecode(octUV);
 
@@ -73,14 +92,6 @@ fn main(
         weightedIrradiance /= totalWeight;
     }
 
-    // Atlas texel coordinate (interior, +1 for border)
-    let probesPerRow = ddgi.grid_count.x;
-    let probeRow = probeIndex / probesPerRow;
-    let probeCol = probeIndex % probesPerRow;
-
-    let atlasX = probeCol * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelX);
-    let atlasY = probeRow * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelY);
-
     // Encode to perceptual space (pow 1/5) before hysteresis blending.
     // This is the standard DDGI technique from NVIDIA RTXGI that prevents
     // dark values from being overwhelmed by bright values during blending.
@@ -88,9 +99,9 @@ fn main(
     let INV_GAMMA = 5.0;
     let newEncoded = pow(max(weightedIrradiance, vec3f(0.0)), vec3f(GAMMA));
 
-    let prevColor = textureLoad(irradianceAtlasRead, vec2i(atlasX, atlasY), 0).rgb;
+    let prevColor = textureLoad(irradianceAtlasRead, dstPixel, 0).rgb;
     let hysteresis = ddgi.hysteresis.x;
     let blended = mix(newEncoded, prevColor, hysteresis);
 
-    textureStore(irradianceAtlasWrite, vec2i(atlasX, atlasY), vec4f(blended, 1.0));
+    textureStore(irradianceAtlasWrite, dstPixel, vec4f(blended, 1.0));
 }
