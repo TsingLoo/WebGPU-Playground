@@ -211,7 +211,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             colorAttachments: [],
             depthStencilAttachment: {
                 view: this.depthTextureView,
-                depthClearValue: 1.0,
+                depthClearValue: 0.0,
                 depthLoadOp: "clear",
                 depthStoreOp: "store"
             }
@@ -420,7 +420,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             layout: renderer.device.createPipelineLayout({
                 bindGroupLayouts: [this.geometryBindGroupLayout, renderer.modelBindGroupLayout, renderer.materialBindGroupLayout]
             }),
-            depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" },
+            depthStencil: { depthWriteEnabled: true, depthCompare: "greater", format: "depth24plus" },
             vertex: { module: renderer.device.createShaderModule({ code: shaders.buildVertexShader(materialType) }), buffers: [renderer.vertexBufferLayout] },
             fragment: fragConfig,
             primitive: { topology: 'triangle-list', cullMode: 'none' }
