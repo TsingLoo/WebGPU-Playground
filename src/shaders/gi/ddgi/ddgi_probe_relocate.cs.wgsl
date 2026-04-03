@@ -31,26 +31,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var furthestHitDir = vec3f(0.0);
     var closestHitDist = 9999.0;
     var closeHitCount = 0u;
+    var backfaceCount = 0u;
 
     var pushDir = vec3f(0.0);
     
     // We analyze the rays sent in the PREVIOUS pass
-    // Note: hitDist > 0, 1000 = sky
+    // Note: positive dist = frontface/sky, negative dist = backface penalty
     for (var i = 0u; i < DDGI_RAYS_PER_PROBE; i++) {
         let rayIdx = probeIndex * DDGI_RAYS_PER_PROBE + i;
         let dist = rayData[rayIdx].w;
         let dir = randomRotation * sphericalFibonacci(i, DDGI_RAYS_PER_PROBE);
 
-        if (dist < closestHitDist) {
-            closestHitDist = dist;
+        if (dist < 0.0) {
+            backfaceCount = backfaceCount + 1u;
         }
 
-        if (dist > furthestHitDist) {
-            furthestHitDist = dist;
+        let absDist = abs(dist);
+
+        if (absDist < closestHitDist) {
+            closestHitDist = absDist;
+        }
+        if (absDist > furthestHitDist) {
+            furthestHitDist = absDist;
             furthestHitDir = dir;
         }
 
-        // If distance is extremely small, it's hitting a backface or is embedded
+        // If distance is extremely small (frontface), we push away to avoid geometry
         if (dist > 0.0 && dist < 0.2) {
             closeHitCount = closeHitCount + 1u;
             // Weigh the push direction more strongly for very close hits
@@ -59,11 +65,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         }
     }
 
-    // State classification (Probe Sleep)
+    // State classification (Probe Sleep / Dead)
+    // Industrial Standard (RTXGI / McGuire): If > 25% of rays hit backfaces, 
+    // the probe is considered embedded inside solid geometry and should be put to sleep
     var newState = 0.0; // active
-    // If almost all rays instantly hit geometry, we are likely embedded in solid space
-    if (f32(closeHitCount) / f32(DDGI_RAYS_PER_PROBE) > 0.9) {
-        newState = 1.0; // sleep
+    let backfaceRatio = f32(backfaceCount) / f32(DDGI_RAYS_PER_PROBE);
+    if (backfaceRatio > 0.25) {
+        newState = 1.0; // sleep (embedded)
     }
 
     // Relocation
@@ -76,11 +84,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (closeHitCount > 0u) {
             // Push probe away from close surfaces
             if (length(pushDir) > 0.0001) {
-                newOffset += normalize(pushDir) * (maxOffset * 0.05); // move gradually
+                // Move gradually based on maxOffset
+                newOffset += normalize(pushDir) * (maxOffset * 0.02); 
             }
-        } else {
-            // Spring back to origin slowly if there's no threat
-            newOffset *= 0.9;
+        } else if (closestHitDist > 0.4) {
+            // Only spring back to origin if we are significantly far from ANY geometry
+            // This creates a deadzone (0.2 < dist < 0.4) where the probe doesn't move,
+            // preventing the probe from oscillating when random rays miss the geometry slightly.
+            newOffset *= 0.98; // Slower, smoother spring back
         }
     }
 

@@ -59,8 +59,15 @@ export const renderSchema: Record<string, ComponentConfig> = {
     },
     'DDGIComponent': {
         targetSystem: 'ddgi',
-        bindings: ['irradianceHysteresis', 'visibilityHysteresis', 'probeTraceAmbient'],
-        onUpdate: (stageObj) => stageObj.ddgi.updateUniforms()
+        bindings: [
+            'showProbes', 'irradianceHysteresis', 'visibilityHysteresis', 'probeTraceAmbient', 'debugMode',
+            { compKey: 'gridMin', transformSet: (v) => Array.from(v) },
+            { compKey: 'gridMax', transformSet: (v) => Array.from(v) }
+        ],
+        onUpdate: (stageObj) => { 
+            stageObj.ddgi.updateUniforms();
+            stageObj.ddgi.reset(); 
+        }
     },
     'RadianceCascadesComponent': {
         targetSystem: 'radianceCascades',

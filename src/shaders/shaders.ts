@@ -36,6 +36,7 @@ import ddgiIrradianceUpdateRaw from './gi/ddgi/ddgi_irradiance_update.cs.wgsl?ra
 import ddgiVisibilityUpdateRaw from './gi/ddgi/ddgi_visibility_update.cs.wgsl?raw';
 import ddgiBorderUpdateRaw from './gi/ddgi/ddgi_border_update.cs.wgsl?raw';
 import ddgiProbeRelocateRaw from './gi/ddgi/ddgi_probe_relocate.cs.wgsl?raw';
+import ddgiDebugProbesRaw from './gi/ddgi/ddgi_debug_probes.wgsl?raw';
 
 // Radiance Cascades
 import rcTraceRaw from './gi/radiance_cascades/rc_trace.cs.wgsl?raw';
@@ -260,6 +261,7 @@ export const ddgiIrradianceUpdateSrc: string = processShaderRaw(ddgiIrradianceUp
 export const ddgiVisibilityUpdateSrc: string = processShaderRaw(ddgiVisibilityUpdateRaw);
 export const ddgiBorderUpdateSrc: string = ddgiBorderUpdateRaw;
 export const ddgiProbeRelocateSrc: string = processShaderRaw(ddgiProbeRelocateRaw);
+export const ddgiDebugProbesSrc: string = processShaderRaw(ddgiDebugProbesRaw);
 
 // Radiance Cascades shaders
 export const rcTraceSrc: string = processShaderRaw(rcTraceRaw);

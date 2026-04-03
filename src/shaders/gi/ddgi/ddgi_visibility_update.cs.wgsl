@@ -25,6 +25,8 @@ fn fibonacciSphereDir(index: u32, total: u32) -> vec3f {
     );
 }
 
+var<workgroup> sharedDist: array<vec2f, 256>; // 16x16 interior
+
 @compute @workgroup_size(${ddgiVisibilityTexels}, ${ddgiVisibilityTexels}, 1)
 fn main(
     @builtin(local_invocation_id) lid: vec3u,
@@ -34,12 +36,23 @@ fn main(
     let totalProbes = ddgi.grid_count.w;
     if (probeIndex >= totalProbes) { return; }
 
+    let probesPerRow = ddgi.grid_count.x;
+    let probeRow = probeIndex / probesPerRow;
+    let probeCol = probeIndex % probesPerRow;
+
+    // lid.x and lid.y are in [0..15].
     let texelX = lid.x;
     let texelY = lid.y;
+    let linearIdx = lid.y * 16u + lid.x;
+
+    let dstPixel = vec2i(
+        probeCol * 18 + 1 + i32(texelX),
+        probeRow * 18 + 1 + i32(texelY)
+    );
 
     let octUV = vec2f(
-        (f32(texelX) + 0.5) / f32(VISIBILITY_TEXELS),
-        (f32(texelY) + 0.5) / f32(VISIBILITY_TEXELS)
+        (f32(texelX) + 0.5) / 16.0,
+        (f32(texelY) + 0.5) / 16.0
     );
     let texelDir = octDecode(octUV);
 
@@ -70,19 +83,61 @@ fn main(
         weightedDist2 /= totalWeight;
     }
 
-    // Atlas texel coordinate
-    let probesPerRow = ddgi.grid_count.x;
-    let probeRow = probeIndex / probesPerRow;
-    let probeCol = probeIndex % probesPerRow;
-
-    let atlasX = probeCol * i32(VISIBILITY_WITH_BORDER) + 1 + i32(texelX);
-    let atlasY = probeRow * i32(VISIBILITY_WITH_BORDER) + 1 + i32(texelY);
-
     // Hysteresis blending
-    let prevVal = textureLoad(visibilityAtlasRead, vec2i(atlasX, atlasY), 0).rg;
+    let prevVal = textureLoad(visibilityAtlasRead, dstPixel, 0).rg;
     let hysteresis = ddgi.hysteresis.y;
     let blendedDist = mix(weightedDist, prevVal.x, hysteresis);
     let blendedDist2 = mix(weightedDist2, prevVal.y, hysteresis);
 
-    textureStore(visibilityAtlasWrite, vec2i(atlasX, atlasY), vec4f(blendedDist, blendedDist2, 0.0, 1.0));
+    // Save to shared memory
+    sharedDist[linearIdx] = vec2f(blendedDist, blendedDist2);
+
+    // Write interior directly
+    textureStore(visibilityAtlasWrite, dstPixel, vec4f(blendedDist, blendedDist2, 0.0, 1.0));
+
+    // Barrier before reading for border copy
+    workgroupBarrier();
+
+    // 68 border pixels for an 18x18 block containing a 16x16 interior
+    if (linearIdx < 68u) {
+        var bx: u32;
+        var by: u32;
+        if (linearIdx < 18u) {
+            bx = linearIdx;
+            by = 0u;
+        } else if (linearIdx < 36u) {
+            bx = linearIdx - 18u;
+            by = 17u;
+        } else if (linearIdx < 52u) {
+            bx = 0u;
+            by = 1u + (linearIdx - 36u);
+        } else {
+            bx = 17u;
+            by = 1u + (linearIdx - 52u);
+        }
+
+        var src_x = bx;
+        var src_y = by;
+
+        if (bx == 0u && by == 0u) { src_x = 1u; src_y = 1u; }
+        else if (bx == 17u && by == 0u) { src_x = 16u; src_y = 1u; }
+        else if (bx == 0u && by == 17u) { src_x = 1u; src_y = 16u; }
+        else if (bx == 17u && by == 17u) { src_x = 16u; src_y = 16u; }
+        else if (bx == 0u) { src_x = 1u; src_y = 17u - by; }
+        else if (bx == 17u) { src_x = 16u; src_y = 17u - by; }
+        else if (by == 0u) { src_y = 1u; src_x = 17u - bx; }
+        else if (by == 17u) { src_y = 16u; src_x = 17u - bx; }
+
+        // Convert [1..16] padded coordinate down to [0..15] shared memory coordinate
+        let int_x = src_x - 1u;
+        let int_y = src_y - 1u;
+        
+        let srcLinearIdx = int_y * 16u + int_x;
+        let bVal = sharedDist[srcLinearIdx];
+
+        let bDstX = probeCol * 18 + i32(bx);
+        let bDstY = probeRow * 18 + i32(by);
+
+        textureStore(visibilityAtlasWrite, vec2i(bDstX, bDstY), vec4f(bVal, 0.0, 1.0));
+    }
 }

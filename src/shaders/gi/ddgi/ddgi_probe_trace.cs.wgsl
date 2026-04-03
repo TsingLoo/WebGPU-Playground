@@ -95,6 +95,12 @@ fn main(
         // Convert to properly outward-facing geometric normal
         let normal = normalize(hit.normal); 
         
+        // IMPORTANT: Penalize backface hits (Probe is slightly inside geometry)
+        // If the ray hits a backface, drastically shrink the distance to correctly trigger occlusion (variance)
+        if (dot(normal, rotatedDir) > 0.0) {
+            hitDist *= -0.2;
+        }
+        
         // --- REAL TEXTURE COLOR SAMPLING ---
         let uv0 = bvhUVs[hit.indices.x].xy;
         let uv1 = bvhUVs[hit.indices.y].xy;

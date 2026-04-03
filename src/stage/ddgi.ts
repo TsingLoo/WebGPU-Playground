@@ -43,6 +43,7 @@ export class DDGI {
     probeTraceAmbient = 0.3;
 
     enabled = false;
+    showProbes = false;
     debugMode = 0; // 0=off, 1=irradiance, 2=visibility
 
     // GPU resources (lazily allocated)
@@ -353,6 +354,19 @@ export class DDGI {
         rotMat[12] = 0; rotMat[13] = 0; rotMat[14] = 0; rotMat[15] = 1;
 
         device.queue.writeBuffer(this.randomRotationBuffer, 0, rotMat);
+    }
+
+    reset() {
+        if (!this._initialized) return;
+        
+        // Zero out the probe data (resets offsets and clears states)
+        const emptyProbeData = new Uint8Array(DDGI.TOTAL_PROBES * 16);
+        device.queue.writeBuffer(this.probeDataBuffer, 0, emptyProbeData);
+        
+        // Reset ping-pong state
+        this.pingPong = 0;
+        
+        console.log("DDGI: Reset probe data (offsets and states cleared).");
     }
 
     private createProbeTraceLayout(): GPUBindGroupLayout {
