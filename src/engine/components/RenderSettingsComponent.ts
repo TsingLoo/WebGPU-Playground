@@ -38,9 +38,24 @@ export class GIComponent extends Component {
 
 export class DDGIComponent extends Component {
     public hideEnableInUI = true;
+    public showProbes: boolean = false;
     public irradianceHysteresis: number = 0.97;
     public visibilityHysteresis: number = 0.98;
     public probeTraceAmbient: number = 0.1;
+    public debugMode: number = 0;
+    
+    public gridMin: [number, number, number] = [-14.0, -4.0, -7.0];
+    public gridMax: [number, number, number] = [14.0, 16.0, 7.0];
+
+    public getUIOptions(): Record<string, any[]> {
+        return {
+            debugMode: [
+                { label: 'Off', value: 0 },
+                { label: 'Show Irradiance Atlas', value: 1 },
+                { label: 'Show Visibility Atlas', value: 2 }
+            ]
+        };
+    }
 }
 
 export class RadianceCascadesComponent extends Component {

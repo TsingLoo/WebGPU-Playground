@@ -400,8 +400,8 @@ fn ddgiProbePosition(gridIdx: vec3i, ddgi: DDGIUniforms) -> vec3f {
 
 // Get the texel coordinate in the irradiance atlas for a probe index and octahedral UV
 fn ddgiIrradianceTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> vec2f {
-    let texelDim = i32(ddgi.irradiance_texel_size.x);      // 8
-    let texelDimBorder = i32(ddgi.irradiance_texel_size.y); // 10 (8+2)
+    let texelDim = f32(ddgi.irradiance_texel_size.x);      // 8.0
+    let texelDimBorder = f32(ddgi.irradiance_texel_size.y); // 10.0
     let atlasWidth = ddgi.irradiance_texel_size.z;
     let atlasHeight = ddgi.irradiance_texel_size.w;
 
@@ -409,23 +409,19 @@ fn ddgiIrradianceTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> 
     let probeRow = probeIdx / probesPerRow;
     let probeCol = probeIdx % probesPerRow;
 
-    let cornerX = f32(probeCol * texelDimBorder + 1); // +1 for border
-    let cornerY = f32(probeRow * texelDimBorder + 1);
-
-    // To prevent bilinear sampling from hitting the uninitialized 1px border,
-    // we map the [0, 1] octUV exactly to the pixel centers of the outermost valid texels.
-    // The inner valid range goes from 0.5 to (texelDim - 0.5).
-    let clampedUV = clamp(octUV, vec2f(0.0), vec2f(1.0));
-    let texelX = cornerX + 0.5 + clampedUV.x * (f32(texelDim) - 1.0);
-    let texelY = cornerY + 0.5 + clampedUV.y * (f32(texelDim) - 1.0);
+    // Corner including the 1px border. We add +1.0 because the interior starts at offset 1.0.
+    // The octUV * texelDim maps the [0, 1] UV to [0.0, 8.0]. 
+    // At exactly 0.0 or 8.0, hardware bilinear filtering will smoothly blend 50% from the border pixel!
+    let texelX = f32(probeCol) * texelDimBorder + 1.0 + octUV.x * texelDim;
+    let texelY = f32(probeRow) * texelDimBorder + 1.0 + octUV.y * texelDim;
 
     return vec2f(texelX / atlasWidth, texelY / atlasHeight);
 }
 
 // Get the texel coordinate in the visibility atlas for a probe index and octahedral UV
 fn ddgiVisibilityTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> vec2f {
-    let texelDim = i32(ddgi.visibility_texel_size.x);       // 16
-    let texelDimBorder = i32(ddgi.visibility_texel_size.y);  // 18 (16+2)
+    let texelDim = f32(ddgi.visibility_texel_size.x);       // 16.0
+    let texelDimBorder = f32(ddgi.visibility_texel_size.y);  // 18.0
     let atlasWidth = ddgi.visibility_texel_size.z;
     let atlasHeight = ddgi.visibility_texel_size.w;
 
@@ -433,13 +429,8 @@ fn ddgiVisibilityTexelCoord(probeIdx: i32, octUV: vec2f, ddgi: DDGIUniforms) -> 
     let probeRow = probeIdx / probesPerRow;
     let probeCol = probeIdx % probesPerRow;
 
-    let cornerX = f32(probeCol * texelDimBorder + 1);
-    let cornerY = f32(probeRow * texelDimBorder + 1);
-
-    // Map [0, 1] UV to the centers of the outermost valid texels to strictly avoid black borders
-    let clampedUV = clamp(octUV, vec2f(0.0), vec2f(1.0));
-    let texelX = cornerX + 0.5 + clampedUV.x * (f32(texelDim) - 1.0);
-    let texelY = cornerY + 0.5 + clampedUV.y * (f32(texelDim) - 1.0);
+    let texelX = f32(probeCol) * texelDimBorder + 1.0 + octUV.x * texelDim;
+    let texelY = f32(probeRow) * texelDimBorder + 1.0 + octUV.y * texelDim;
 
     return vec2f(texelX / atlasWidth, texelY / atlasHeight);
 }

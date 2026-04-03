@@ -8,6 +8,7 @@ import { SkyboxPass } from './passes/skybox_pass';
 import { VolumetricPass } from './passes/volumetric_pass';
 import { SSAOPass } from './passes/ssao_pass';
 import { DebugPass } from './passes/debug_pass';
+import { DDGIDebugPass } from './passes/ddgi_debug_pass';
 import { ClusteringPass } from './passes/clustering_pass';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
@@ -44,6 +45,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     volumetricPass: VolumetricPass;
     ssaoPass: SSAOPass;
     debugPass: DebugPass;
+    ddgiDebugPass: DDGIDebugPass;
 
     radianceCascades: RadianceCascades;
     vsm: VSM;
@@ -190,6 +192,8 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             cameraBindGroupLayout: this.geometryBindGroupLayout,
             cameraBindGroup: this.geometryBindGroup,
         });
+
+        this.ddgiDebugPass = new DDGIDebugPass();
     }
 
     // ==== Template Method Architecture ====
@@ -348,6 +352,15 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
             const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
             this.debugPass.execute(encoder, canvasTextureView, this.depthTextureView, this.geometryBindGroup, minPos, maxPos, color);
+        }
+
+        // 13. DDGI Probes
+        if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
+            this.ddgiDebugPass.execute(encoder, canvasTextureView, this.depthTextureView, {
+                cameraBindGroupLayout: this.geometryBindGroupLayout,
+                cameraBindGroup: this.geometryBindGroup,
+                ddgi: this.stage.ddgi
+            });
         }
 
         renderer.device.queue.submit([encoder.finish()]);

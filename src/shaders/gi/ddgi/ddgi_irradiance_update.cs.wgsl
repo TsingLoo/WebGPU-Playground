@@ -25,7 +25,9 @@ fn fibonacciSphereDir(index: u32, total: u32) -> vec3f {
     );
 }
 
-@compute @workgroup_size(${ddgiIrradianceTexels}, ${ddgiIrradianceTexels}, 1)
+var<workgroup> sharedIrradiance: array<vec3f, 100>; // 10x10
+
+@compute @workgroup_size(10, 10, 1)
 fn main(
     @builtin(local_invocation_id) lid: vec3u,
     @builtin(workgroup_id) wgid: vec3u
@@ -34,74 +36,86 @@ fn main(
     let totalProbes = ddgi.grid_count.w;
     if (probeIndex >= totalProbes) { return; }
 
-    // Texel position within this probe's octahedral irradiance map
-    let texelX = lid.x;
-    let texelY = lid.y;
-
-    // Convert texel to octahedral UV [0,1]^2
-    let octUV = vec2f(
-        (f32(texelX) + 0.5) / f32(IRRADIANCE_TEXELS),
-        (f32(texelY) + 0.5) / f32(IRRADIANCE_TEXELS)
-    );
-
     let probesPerRow = ddgi.grid_count.x;
     let probeRow = probeIndex / probesPerRow;
     let probeCol = probeIndex % probesPerRow;
 
     let dstPixel = vec2i(
-        probeCol * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelX),
-        probeRow * i32(IRRADIANCE_WITH_BORDER) + 1 + i32(texelY)
+        probeCol * 10 + i32(lid.x),
+        probeRow * 10 + i32(lid.y)
     );
+    let linearIdx = lid.y * 10u + lid.x;
 
     let pData = probeData[probeIndex];
     if (pData.w > 0.5) { // sleeping
-        // If asleep, keep whatever is in the old atlas, or just output 0.
-        // Copying old atlas lets it gracefully ignore updates.
         let oldColor = textureLoad(irradianceAtlasRead, dstPixel, 0);
         textureStore(irradianceAtlasWrite, dstPixel, oldColor);
         return;
     }
 
-    // Decode to world-space direction
-    let texelDir = octDecode(octUV);
+    let isBorder = (lid.x == 0u || lid.x == 9u || lid.y == 0u || lid.y == 9u);
 
-    // Accumulate irradiance from all rays
-    var weightedIrradiance = vec3f(0.0);
-    var totalWeight = 0.0;
+    if (!isBorder) {
+        // Interior pixel: compute irradiance
+        let texelX = lid.x - 1u;
+        let texelY = lid.y - 1u;
+        
+        // Convert texel to octahedral UV [0,1]^2 for the 8x8 interior
+        let octUV = vec2f(
+            (f32(texelX) + 0.5) / 8.0,
+            (f32(texelY) + 0.5) / 8.0
+        );
+        let texelDir = octDecode(octUV);
 
-    let rayBaseIdx = u32(probeIndex) * DDGI_RAYS_PER_PROBE;
+        var weightedIrradiance = vec3f(0.0);
+        var totalWeight = 0.0;
+        let rayBaseIdx = u32(probeIndex) * DDGI_RAYS_PER_PROBE;
 
-    for (var r = 0u; r < DDGI_RAYS_PER_PROBE; r++) {
-        // Reconstruct the ray direction (must match probe_trace)
-        let baseDir = fibonacciSphereDir(r, DDGI_RAYS_PER_PROBE);
-        let rayDir = normalize((randomRotation * vec4f(baseDir, 0.0)).xyz);
-
-        let rayResult = rayData[rayBaseIdx + r];
-        let radiance = rayResult.xyz;
-
-        // Weight by cosine of angle between texel direction and ray direction
-        let weight = max(dot(texelDir, rayDir), 0.0);
-
-        if (weight > 0.0) {
-            weightedIrradiance += radiance * weight;
-            totalWeight += weight;
+        for (var r = 0u; r < DDGI_RAYS_PER_PROBE; r++) {
+            let baseDir = fibonacciSphereDir(r, DDGI_RAYS_PER_PROBE);
+            let rayDir = normalize((randomRotation * vec4f(baseDir, 0.0)).xyz);
+            let rayResult = rayData[rayBaseIdx + r];
+            let weight = max(dot(texelDir, rayDir), 0.0);
+            if (weight > 0.0) {
+                weightedIrradiance += rayResult.xyz * weight;
+                totalWeight += weight;
+            }
         }
+        if (totalWeight > 0.0) {
+            weightedIrradiance /= totalWeight;
+        }
+
+        // Encode to perceptual space
+        let GAMMA = 1.0 / 5.0;
+        let newEncoded = pow(max(weightedIrradiance, vec3f(0.0)), vec3f(GAMMA));
+
+        let prevColor = textureLoad(irradianceAtlasRead, dstPixel, 0).rgb;
+        let hysteresis = ddgi.hysteresis.x;
+        let blended = mix(newEncoded, prevColor, hysteresis);
+
+        sharedIrradiance[linearIdx] = blended;
     }
 
-    if (totalWeight > 0.0) {
-        weightedIrradiance /= totalWeight;
+    workgroupBarrier();
+
+    if (isBorder) {
+        // Border pixel: mirror from interior
+        var src_x = lid.x;
+        var src_y = lid.y;
+
+        if (lid.x == 0u && lid.y == 0u) { src_x = 1u; src_y = 1u; }
+        else if (lid.x == 9u && lid.y == 0u) { src_x = 8u; src_y = 1u; }
+        else if (lid.x == 0u && lid.y == 9u) { src_x = 1u; src_y = 8u; }
+        else if (lid.x == 9u && lid.y == 9u) { src_x = 8u; src_y = 8u; }
+        else if (lid.x == 0u) { src_x = 1u; src_y = 9u - lid.y; }
+        else if (lid.x == 9u) { src_x = 8u; src_y = 9u - lid.y; }
+        else if (lid.y == 0u) { src_y = 1u; src_x = 9u - lid.x; }
+        else if (lid.y == 9u) { src_y = 8u; src_x = 9u - lid.x; }
+
+        let srcIdx = src_y * 10u + src_x;
+        sharedIrradiance[linearIdx] = sharedIrradiance[srcIdx];
     }
-
-    // Encode to perceptual space (pow 1/5) before hysteresis blending.
-    // This is the standard DDGI technique from NVIDIA RTXGI that prevents
-    // dark values from being overwhelmed by bright values during blending.
-    let GAMMA = 1.0 / 5.0;
-    let INV_GAMMA = 5.0;
-    let newEncoded = pow(max(weightedIrradiance, vec3f(0.0)), vec3f(GAMMA));
-
-    let prevColor = textureLoad(irradianceAtlasRead, dstPixel, 0).rgb;
-    let hysteresis = ddgi.hysteresis.x;
-    let blended = mix(newEncoded, prevColor, hysteresis);
-
-    textureStore(irradianceAtlasWrite, dstPixel, vec4f(blended, 1.0));
+    
+    // Everyone writes to atlas
+    textureStore(irradianceAtlasWrite, dstPixel, vec4f(sharedIrradiance[linearIdx], 1.0));
 }
