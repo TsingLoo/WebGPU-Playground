@@ -101,3 +101,10 @@ export class SSAOComponent extends Component {
     public bias: number = 0.025;
     public power: number = 1.0;
 }
+
+export class SSRComponent extends Component {
+    public enabled: boolean = false;
+    public maxDistance: number = 100.0;
+    public maxSteps: number = 64;
+    public thickness: number = 0.5;
+}
