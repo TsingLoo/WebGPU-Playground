@@ -10,6 +10,7 @@ import { SSAOPass } from './passes/ssao_pass';
 import { DebugPass } from './passes/debug_pass';
 import { DDGIDebugPass } from './passes/ddgi_debug_pass';
 import { ClusteringPass } from './passes/clustering_pass';
+import { HiZPass } from './passes/hiz_pass';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
     depthTexture: GPUTexture;
@@ -46,6 +47,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     ssaoPass: SSAOPass;
     debugPass: DebugPass;
     ddgiDebugPass: DDGIDebugPass;
+    hizPass: HiZPass;
 
     radianceCascades: RadianceCascades;
     vsm: VSM;
@@ -157,6 +159,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             entries: [{ binding: 0, resource: { buffer: this.camera.uniformsBuffer } }]
         });
 
+        this.hizPass = new HiZPass();
+        this.hizPass.resize(renderer.canvas.width, renderer.canvas.height);
+
         // Light Clustering
         this.clusteringPass = new ClusteringPass({
             cameraBuffer: this.camera.uniformsBuffer,
@@ -165,12 +170,13 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             globalLightIndicesBuffer: this.globalLightIndicesDeviceBuffer,
             clusterSetBuffer: this.clusterSetDeviceBuffer,
             zeroBuffer: this.zeroDeviceBuffer,
+            hizTextureView: this.hizPass.hizTexture.createView()
         });
 
         // Initialize pass modules
         this.ssaoPass = new SSAOPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            gBufferPositionView: this.gBufferPositionTextureView,
+            hizTextureView: this.hizPass.hizTexture.createView(),
             gBufferNormalView: this.gBufferNormalTextureView,
             ssaoUniformsBuffer: this.stage.ssao.uniformsBuffer,
         });
@@ -252,6 +258,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                                zPrepass.drawIndexed(primitive.numIndices);
                            }, false);
         zPrepass.end();
+
+        // 2.5 Hi-Z Generation
+        this.hizPass.execute(encoder, this.depthTextureView);
 
         // 3. VSM Shadow Map Pass
         this.stage.renderShadowMap(encoder, this.depthTextureView);

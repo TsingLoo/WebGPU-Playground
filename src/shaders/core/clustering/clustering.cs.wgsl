@@ -4,6 +4,7 @@
 @group(${bindGroup_scene}) @binding(2) var<storage, read_write> tileOffsets: array<TileMeta>;
 @group(${bindGroup_scene}) @binding(3) var<storage, read_write> globalLightIndices: LightIndexList;
 @group(${bindGroup_scene}) @binding(4) var<uniform> clusterSet: ClusterSet;
+@group(${bindGroup_scene}) @binding(5) var hizTexture: texture_2d<f32>;
 
 const MAX_LIGHTS_PER_CLUSTER = ${maxLightsPerCluster}u;
 var<workgroup> local_light_indices: array<u32, MAX_LIGHTS_PER_CLUSTER>;
@@ -19,6 +20,7 @@ var<workgroup> local_light_indices: array<u32, MAX_LIGHTS_PER_CLUSTER>;
 var<workgroup> local_light_count: atomic<u32>;
 var<workgroup> cluster_aabb_min: vec3f;
 var<workgroup> cluster_aabb_max: vec3f;
+var<workgroup> cluster_has_geometry: u32;
 
 // ------------------------------------
 // Assigning lights to clusters:
@@ -112,35 +114,65 @@ fn main(
         
         cluster_aabb_min = aabbMin;
         cluster_aabb_max = aabbMax;
+
+        // --- Hi-Z Cluster Culling ---
+        let dim = vec2f(textureDimensions(hizTexture, 0));
+        let uvMin = clamp(vec2f(xMin, -yMax) * 0.5 + vec2f(0.5, 0.5), vec2f(0.0), vec2f(1.0));
+        let uvMax = clamp(vec2f(xMax, -yMin) * 0.5 + vec2f(0.5, 0.5), vec2f(0.0), vec2f(1.0)); 
+        
+        let pxMin = min(uvMin, uvMax) * dim;
+        let pxMax = max(uvMin, uvMax) * dim;
+        let size = pxMax - pxMin;
+        
+        let max_size = max(max(size.x, size.y), 1.0);
+        let level = u32(clamp(log2(max_size), 0.0, 10.0));
+        
+        let p0 = vec2i(pxMin) >> vec2u(level);
+        let p1 = vec2i(pxMax) >> vec2u(level);
+        let sDims = vec2i(textureDimensions(hizTexture, level));
+        
+        let d00 = textureLoad(hizTexture, clamp(vec2i(p0.x, p0.y), vec2i(0), sDims - 1), level).rg;
+        let d10 = textureLoad(hizTexture, clamp(vec2i(p1.x, p0.y), vec2i(0), sDims - 1), level).rg;
+        let d01 = textureLoad(hizTexture, clamp(vec2i(p0.x, p1.y), vec2i(0), sDims - 1), level).rg;
+        let d11 = textureLoad(hizTexture, clamp(vec2i(p1.x, p1.y), vec2i(0), sDims - 1), level).rg;
+        
+        let tile_ndc_far = min(min(d00.r, d10.r), min(d01.r, d11.r));
+        let tile_ndc_near = max(max(d00.g, d10.g), max(d01.g, d11.g));
+        
+        var tile_view_far = -p32 / (p22 + tile_ndc_far);
+        if (tile_ndc_far <= 0.000001) {
+            tile_view_far = -1000000.0;
+        }
+        let tile_view_near = -p32 / (p22 + tile_ndc_near);
+        
+        let has_geom = (z_view_max >= tile_view_far) && (z_view_min <= tile_view_near);
+        cluster_has_geometry = select(0u, 1u, has_geom);
     }
 
     workgroupBarrier();
-    
-    let radius = f32(${lightRadius});
-    let V = camera.view_mat;
 
-    let num_lights = lightSet.numLights;
-    for (var li = local_idx; li < num_lights; li += 64u) {
-        
-        let light_view_pos = (V * vec4f(lightSet.lights[li].pos, 1.0)).xyz;
+    if (cluster_has_geometry == 1u) {
+        let radius = f32(${lightRadius});
+        let V = camera.view_mat;
 
-        let sMin = light_view_pos - vec3f(radius);
-        let sMax = light_view_pos + vec3f(radius);
-        let intersectMin = max(cluster_aabb_min, sMin);
-        let intersectMax = min(cluster_aabb_max, sMax);
-        let overlaps = all(intersectMin <= intersectMax);
-        
-        if (overlaps) {
-            let list_idx = atomicAdd(&local_light_count, 1u);
-            if (list_idx < MAX_LIGHTS_PER_CLUSTER) {
-                local_light_indices[list_idx] = li;
+        let num_lights = lightSet.numLights;
+        for (var li = local_idx; li < num_lights; li += 64u) {
+            
+            let light_view_pos = (V * vec4f(lightSet.lights[li].pos, 1.0)).xyz;
+
+            let sMin = light_view_pos - vec3f(radius);
+            let sMax = light_view_pos + vec3f(radius);
+            let intersectMin = max(cluster_aabb_min, sMin);
+            let intersectMax = min(cluster_aabb_max, sMax);
+            let overlaps = all(intersectMin <= intersectMax);
+            
+            if (overlaps) {
+                let list_idx = atomicAdd(&local_light_count, 1u);
+                if (list_idx < MAX_LIGHTS_PER_CLUSTER) {
+                    local_light_indices[list_idx] = li;
+                }
             }
         }
-
-        // let list_idx = atomicAdd(&local_light_count, 1u);
-        // if (list_idx < MAX_LIGHTS_PER_CLUSTER) {
-        //     local_light_indices[list_idx] = li;
-        // }
     }
 
     workgroupBarrier();
@@ -152,22 +184,25 @@ fn main(
         let num_clusters_Z = clusterSet.num_clusters_Z;
         let num_clusters = num_clusters_X * num_clusters_Y * num_clusters_Z;
 
-        let num_lights = lightSet.numLights;
-
-        let final_count = atomicLoad(&local_light_count);
-        let count_to_write = min(final_count, MAX_LIGHTS_PER_CLUSTER);
-
         let cluster_index = group_id.z * (num_clusters_X * num_clusters_Y) +
                               group_id.y * num_clusters_X +
                               group_id.x;
 
-        let global_offset = atomicAdd(&globalLightIndices.counter, count_to_write);
+        if (cluster_has_geometry == 1u) {
+            let final_count = atomicLoad(&local_light_count);
+            let count_to_write = min(final_count, MAX_LIGHTS_PER_CLUSTER);
 
-        for (var i = 0u; i < count_to_write; i += 1u) {
-            globalLightIndices.indices[global_offset + i] = local_light_indices[i];
+            let global_offset = atomicAdd(&globalLightIndices.counter, count_to_write);
+
+            for (var i = 0u; i < count_to_write; i += 1u) {
+                globalLightIndices.indices[global_offset + i] = local_light_indices[i];
+            }
+
+            tileOffsets[cluster_index].offset = global_offset;
+            tileOffsets[cluster_index].count = count_to_write;
+        } else {
+            tileOffsets[cluster_index].offset = 0u;
+            tileOffsets[cluster_index].count = 0u;
         }
-
-        tileOffsets[cluster_index].offset = global_offset;
-        tileOffsets[cluster_index].count = count_to_write;
     }
 }
