@@ -16,7 +16,12 @@ export class Scene {
     public globalMaterialBuffer!: GPUBuffer;
     public baseColorTexArray!: GPUTexture;
     public baseColorTexArrayView!: GPUTextureView;
-    
+
+    // CPU Data required for appending
+    public materialDataArray: Float32Array = new Float32Array(0);
+    public materialCount: number = 0;
+    public layerCount: number = 1; // Start at 1 to have at least a dummy layer
+
     // Fast lookup caches
     private componentsCache: Map<Function, Set<Component>> = new Map();
 
@@ -97,12 +102,86 @@ export class Scene {
                 const primitives = mr.mesh.primitives;
                 for (let i = 0; i < primitives.length; i++) {
                     const prim = primitives[i];
-                    if (isOpaque === undefined || (prim.material.type === 'opaque') === isOpaque) {
+                    if (isOpaque === undefined || prim.material.isOpaque === isOpaque) {
                         materialFunction(prim.material);
                         primitiveFunction(prim);
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Merges a new batch of CPU materials and new GPU images into the existing monolithic Scene resources.
+     * WebGPU requires replacing ArrayTextures and StorageBuffers to increase their size.
+     */
+    public async mergeMaterialAndTextures(
+        device: GPUDevice,
+        newMaterialData: Float32Array,
+        newCount: number,
+        newImages: GPUTexture[], // The temporarily uploaded individual resized images 
+        newLayerCount: number
+    ) {
+        // --- Merge Global Material Buffer ---
+        const combinedMaterials = new Float32Array(this.materialCount * 8 + newCount * 8);
+        combinedMaterials.set(this.materialDataArray);
+        combinedMaterials.set(newMaterialData, this.materialCount * 8);
+
+        this.materialDataArray = combinedMaterials;
+        this.materialCount += newCount;
+
+        const newGlobalMaterialBuffer = device.createBuffer({
+            label: "Global Material Buffer (Merged)",
+            size: this.materialDataArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(newGlobalMaterialBuffer, 0, this.materialDataArray as any);
+        
+        if (this.globalMaterialBuffer) {
+            this.globalMaterialBuffer.destroy();
+        }
+        this.globalMaterialBuffer = newGlobalMaterialBuffer;
+
+        // --- Merge BaseColor Texture Array ---
+        const TEX_ARRAY_SIZE = 256;
+        const totalLayers = this.layerCount + newLayerCount;
+
+        const newBaseColorTexArray = device.createTexture({
+            label: "BaseColor Texture Array (Merged)",
+            size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
+            format: 'rgba8unorm',
+            dimension: '2d',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+
+        const commandEncoder = device.createCommandEncoder();
+
+        // 1. Copy old layers if they exist
+        if (this.baseColorTexArray && this.layerCount > 0) {
+            commandEncoder.copyTextureToTexture(
+                { texture: this.baseColorTexArray, aspect: 'all' },
+                { texture: newBaseColorTexArray, aspect: 'all' },
+                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, this.layerCount]
+            );
+        }
+
+        // 2. Copy new images 
+        for (let i = 0; i < newImages.length; i++) {
+            commandEncoder.copyTextureToTexture(
+                { texture: newImages[i], aspect: 'all' },
+                { texture: newBaseColorTexArray, origin: [0, 0, this.layerCount + i] },
+                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1]
+            );
+        }
+
+        device.queue.submit([commandEncoder.finish()]);
+
+        if (this.baseColorTexArray) {
+            this.baseColorTexArray.destroy();
+        }
+
+        this.baseColorTexArray = newBaseColorTexArray;
+        this.baseColorTexArrayView = newBaseColorTexArray.createView({ dimension: '2d-array' });
+        this.layerCount = totalLayers;
     }
 }

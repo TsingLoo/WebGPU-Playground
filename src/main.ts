@@ -3,7 +3,7 @@ const isMobileDevice = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent
 import Stats from 'stats.js';
 import { GUI } from 'dat.gui';
 
-import { initWebGPU, Renderer } from './renderer';
+import { initWebGPU, Renderer, device } from './renderer';
 
 import { ForwardPlusRenderer } from './renderers/forward_plus';
 import { ClusteredDeferredRenderer } from './renderers/clustered_deferred';
@@ -20,7 +20,8 @@ import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent 
 import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
 import { applyComponentSchema } from './engine/RenderSchema';
-import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
+import { setupLoaders, loadGltf, loadGltfBuffer, buildVoxelGrid } from './engine/GLTFLoader';
+import { buildBVHFromScene } from './stage/bvh_builder';
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
 import { Stage } from './stage/stage';
@@ -34,14 +35,15 @@ await initWebGPU();
 setupLoaders();
 
 let scene = new Scene();
-const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf');
+const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
 scene.root.addChild(gltfResult.rootEntity);
-scene.bvhData = gltfResult.bvhData;
-scene.voxelGrid = gltfResult.voxelGrid;
-scene.voxelGridView = gltfResult.voxelGridView;
-scene.globalMaterialBuffer = gltfResult.globalMaterialBuffer;
-scene.baseColorTexArray = gltfResult.baseColorTexArray;
-scene.baseColorTexArrayView = gltfResult.baseColorTexArrayView;
+await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.baseColorImages.length);
+scene.bvhData = buildBVHFromScene(scene.root);
+
+const voxelResult = buildVoxelGrid(scene.root);
+scene.voxelGrid = voxelResult.voxelGrid;
+scene.voxelGridView = voxelResult.voxelGridView;
+
 scene.root.updateWorldTransform();
 
 const sceneTreeUI = new SceneTreeUI();
@@ -456,14 +458,16 @@ modelFileInput.addEventListener('change', async (event) => {
         const buffer = await file.arrayBuffer();
 
         const newScene = new Scene();
-        const result = await loadGltfBuffer(buffer);
+        const result = await loadGltfBuffer(buffer, 0, 0); // brand new scene starts from offset 0
         newScene.root.addChild(result.rootEntity);
-        newScene.bvhData = result.bvhData;
-        newScene.voxelGrid = result.voxelGrid;
-        newScene.voxelGridView = result.voxelGridView;
-        newScene.globalMaterialBuffer = result.globalMaterialBuffer;
-        newScene.baseColorTexArray = result.baseColorTexArray;
-        newScene.baseColorTexArrayView = result.baseColorTexArrayView;
+        
+        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        newScene.bvhData = buildBVHFromScene(newScene.root);
+        
+        const voxelResult = buildVoxelGrid(newScene.root);
+        newScene.voxelGrid = voxelResult.voxelGrid;
+        newScene.voxelGridView = voxelResult.voxelGridView;
+        
         newScene.root.updateWorldTransform();
         addHelpersToScene(newScene, camera, stage);
         stage.scene = newScene;
@@ -487,9 +491,59 @@ modelFileInput.addEventListener('change', async (event) => {
 });
 
 const modelUploadController = {
-    loadModel: () => { modelFileInput.click(); }
+    loadModel: () => { modelFileInput.click(); },
+    appendModel: () => { appendModelFileInput.click(); }
 };
 toolsFolder.add(modelUploadController, 'loadModel').name('Load Model (.gltf/.glb)');
+toolsFolder.add(modelUploadController, 'appendModel').name('Append Model (.gltf/.glb)');
+
+const appendModelFileInput = document.createElement('input');
+appendModelFileInput.type = 'file';
+appendModelFileInput.accept = '.gltf,.glb';
+appendModelFileInput.style.display = 'none';
+document.body.appendChild(appendModelFileInput);
+
+appendModelFileInput.addEventListener('change', async (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+
+    try {
+        const fileName = file.name.toLowerCase();
+        if (!fileName.endsWith('.gltf') && !fileName.endsWith('.glb')) {
+            alert('Unsupported format. Please upload .gltf or .glb');
+            return;
+        }
+
+        console.log(`[Model] Appending ${file.name}...`);
+        const buffer = await file.arrayBuffer();
+
+        // Load and apply offsets
+        const result = await loadGltfBuffer(buffer, scene.materialCount, scene.layerCount);
+        scene.root.addChild(result.rootEntity);
+        
+        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        scene.bvhData = buildBVHFromScene(scene.root);
+        
+        const voxelResult = buildVoxelGrid(scene.root);
+        scene.voxelGrid = voxelResult.voxelGrid;
+        scene.voxelGridView = voxelResult.voxelGridView;
+        
+        scene.root.updateWorldTransform();
+        sceneTreeUI.setScene(scene); // Refresh UI hierarchy
+
+        // Re-init renderer to pick up the expanded global buffers and textures
+        if (renderModeController) {
+            setRenderer(renderModeController.getValue());
+        }
+
+        console.log(`[Model] Successfully appended ${file.name}`);
+    } catch (e) {
+        console.error("Failed to append model:", e);
+        alert("Failed to append model: " + String(e));
+    }
+
+    appendModelFileInput.value = '';
+});
 
 
 setRenderer(renderModeController.getValue());
