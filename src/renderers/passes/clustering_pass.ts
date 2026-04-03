@@ -8,6 +8,7 @@ export interface ClusteringPassDeps {
     globalLightIndicesBuffer: GPUBuffer;
     clusterSetBuffer: GPUBuffer;
     zeroBuffer: GPUBuffer;
+    hizTextureView: GPUTextureView;
 }
 
 export class ClusteringPass {
@@ -27,7 +28,8 @@ export class ClusteringPass {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } }
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } }
             ]
         });
         this.bindGroup = renderer.device.createBindGroup({
@@ -39,6 +41,7 @@ export class ClusteringPass {
                 { binding: 2, resource: { buffer: deps.tileOffsetsBuffer } },
                 { binding: 3, resource: { buffer: deps.globalLightIndicesBuffer } },
                 { binding: 4, resource: { buffer: deps.clusterSetBuffer } },
+                { binding: 5, resource: deps.hizTextureView }
             ]
         });
         this.pipeline = renderer.device.createComputePipeline({

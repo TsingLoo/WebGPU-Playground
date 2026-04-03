@@ -20,6 +20,8 @@ import clusteredDeferredComputeSrcRaw from './rendering_path/clustered_deferred/
 import moveLightsComputeRaw from './core/clustering/move_lights.cs.wgsl?raw';
 import clusteringComputeRaw from './core/clustering/clustering.cs.wgsl?raw';
 
+import hizDownsampleRaw from './hiz/hiz_downsample.cs.wgsl?raw';
+
 import zPrepassFragRaw from './core/zPrepass.fs.wgsl?raw';
 import debugBoxRaw from './core/debug_box.wgsl?raw';
 
@@ -224,6 +226,8 @@ export const clusteredDeferredComputeSrc: string = commonSrc + lightingComposite
 
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);
+
+export const hizDownsampleSrc: string = processShaderRaw(hizDownsampleRaw);
 
 export function buildZPrepassShader(materialType: string): string {
     const matDesc = materials[materialType] || materials['standard'];

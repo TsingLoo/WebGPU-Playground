@@ -3,7 +3,7 @@ import * as shaders from '../../shaders/shaders';
 
 export interface SSAOPassDeps {
     cameraBuffer: GPUBuffer;
-    gBufferPositionView: GPUTextureView;
+    hizTextureView: GPUTextureView;
     gBufferNormalView: GPUTextureView;
     ssaoUniformsBuffer: GPUBuffer;
 }
@@ -57,7 +57,7 @@ export class SSAOPass {
             layout: ssaoBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: deps.cameraBuffer } },
-                { binding: 1, resource: deps.gBufferPositionView },
+                { binding: 1, resource: deps.hizTextureView },
                 { binding: 2, resource: deps.gBufferNormalView },
                 { binding: 3, resource: { buffer: deps.ssaoUniformsBuffer } },
             ]
