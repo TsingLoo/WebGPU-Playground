@@ -72,7 +72,8 @@ export class VSM {
     allocatePagesPipeline!: GPUComputePipeline;
     allocateBindGroupLayout!: GPUBindGroupLayout;
 
-    shadowPipeline!: GPURenderPipeline;
+    shadowOpaquePipeline!: GPURenderPipeline;
+    shadowCutoutPipeline!: GPURenderPipeline;
     shadowBindGroupLayout!: GPUBindGroupLayout;
 
     // --- State ---
@@ -254,8 +255,31 @@ export class VSM {
             ],
         });
 
-        this.shadowPipeline = pipelineCache.getRenderPipeline(device, {
-            label: "VSM Shadow Pipeline",
+        this.shadowOpaquePipeline = pipelineCache.getRenderPipeline(device, {
+            label: "VSM Shadow Opaque Pipeline",
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [
+                    this.shadowBindGroupLayout,
+                    renderer.modelBindGroupLayout,
+                    renderer.materialBindGroupLayout,
+                ],
+            }),
+            depthStencil: {
+                format: 'depth32float',
+                depthWriteEnabled: true,
+                depthCompare: 'less',
+                depthBias: 4,
+                depthBiasSlopeScale: 2.5,
+            },
+            vertex: {
+                module: device.createShaderModule({ label: "VSM Shadow VS", code: shaders.shadowVertSrc }),
+                entryPoint: 'main',
+                buffers: [renderer.vertexBufferLayout],
+            },
+        }, "VSM_Shadow_Opaque");
+
+        this.shadowCutoutPipeline = pipelineCache.getRenderPipeline(device, {
+            label: "VSM Shadow Cutout Pipeline",
             layout: device.createPipelineLayout({
                 bindGroupLayouts: [
                     this.shadowBindGroupLayout,
@@ -280,7 +304,7 @@ export class VSM {
                 entryPoint: 'main',
                 targets: [],
             },
-        }, "VSM_Shadow");
+        }, "VSM_Shadow_Cutout");
     }
 
     /**
@@ -552,8 +576,6 @@ export class VSM {
             },
         });
 
-        shadowPass.setPipeline(this.shadowPipeline);
-
         // Square grid layout: arrange levels as ceil(sqrt(N)) columns
         // This ensures each level gets a square tile instead of a stretched band
         const gridCols = Math.ceil(Math.sqrt(this.numClipmapLevels));
@@ -570,6 +592,8 @@ export class VSM {
             shadowPass.setViewport(xOffset, yOffset, tileSize, tileSize, 0, 1);
             shadowPass.setScissorRect(xOffset, yOffset, tileSize, tileSize);
 
+            // 1. Draw Opaque primitives
+            shadowPass.setPipeline(this.shadowOpaquePipeline);
             scene.iterate(
                 mr => { shadowPass.setBindGroup(1, mr.modelBindGroup!); },
                 material => { shadowPass.setBindGroup(2, material.materialBindGroup); },
@@ -578,6 +602,20 @@ export class VSM {
                     shadowPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                     shadowPass.drawIndexed(primitive.numIndices);
                 },
+                true // isOpaque = true
+            );
+
+            // 2. Draw Alpha-Cutout primitives
+            shadowPass.setPipeline(this.shadowCutoutPipeline);
+            scene.iterate(
+                mr => { shadowPass.setBindGroup(1, mr.modelBindGroup!); },
+                material => { shadowPass.setBindGroup(2, material.materialBindGroup); },
+                primitive => {
+                    shadowPass.setVertexBuffer(0, primitive.vertexBuffer);
+                    shadowPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                    shadowPass.drawIndexed(primitive.numIndices);
+                },
+                false // isOpaque = false
             );
         }
 
