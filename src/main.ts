@@ -17,7 +17,7 @@ import { Scene } from './engine/Scene';
 import { Entity } from './engine/Entity';
 import { CameraComponent } from './engine/components/CameraComponent';
 import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
-import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
+import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, SSRComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
 import { applyComponentSchema } from './engine/RenderSchema';
 import { setupLoaders, loadGltf, loadGltfBuffer } from './engine/GLTFLoader';
@@ -165,6 +165,10 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     const ssaoComp = new SSAOComponent();
     applyComponentSchema(ssaoComp, 'SSAOComponent', stageObj, globals);
     ppEntity.addComponent(ssaoComp);
+    
+    const ssrComp = new SSRComponent();
+    applyComponentSchema(ssrComp, 'SSRComponent', stageObj, globals);
+    ppEntity.addComponent(ssrComp);
     targetScene.root.addChild(ppEntity);
 }
 

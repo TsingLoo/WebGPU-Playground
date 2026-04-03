@@ -28,7 +28,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
         this.shadingOutputDeviceTexture = renderer.device.createTexture({
             label: "shading output Texture",
             size: geometryDeviceTextureSize,
-            format: "rgba8unorm",
+            format: "rgba16float",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
         });
         this.shadingOutputDeviceTextureView = this.shadingOutputDeviceTexture.createView();
@@ -46,7 +46,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } },
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } },
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "depth" } },
-                { binding: 10, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm", viewDimension: "2d" } },
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba16float", viewDimension: "2d" } },
                 { binding: 11, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float", viewDimension: "cube" } },
                 { binding: 12, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float", viewDimension: "cube" } },
                 { binding: 13, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
@@ -159,7 +159,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                     code: shaders.fullscreenBlitFragSrc
                 }),
                 entryPoint: "main",
-                targets: [{ format: renderer.canvasFormat }]
+                targets: [{ format: "rgba16float" }]
             }
         });
     }
