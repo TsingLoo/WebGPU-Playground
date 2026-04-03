@@ -23,7 +23,7 @@ export class DebugPass {
             vertex: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "vs_main" },
             fragment: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "fs_main", targets: [{ format: renderer.canvasFormat }] },
             primitive: { topology: "line-list" },
-            depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" }
+            depthStencil: { depthWriteEnabled: false, depthCompare: "greater-equal", format: "depth24plus" }
         });
 
         // box buffer: minPos vec4 + maxPos vec4 + color vec4 -> 48 bytes

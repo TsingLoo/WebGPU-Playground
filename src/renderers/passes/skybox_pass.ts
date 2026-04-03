@@ -39,7 +39,7 @@ export class SkyboxPass {
                 targets: [{ format: renderer.canvasFormat }]
             },
             primitive: { topology: "triangle-list", cullMode: "none" },
-            depthStencil: { depthWriteEnabled: false, depthCompare: "less-equal", format: "depth24plus" }
+            depthStencil: { depthWriteEnabled: false, depthCompare: "greater-equal", format: "depth24plus" }
         });
     }
 

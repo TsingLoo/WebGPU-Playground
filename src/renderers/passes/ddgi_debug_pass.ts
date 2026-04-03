@@ -45,7 +45,7 @@ export class DDGIDebugPass {
                 targets: [{ format: renderer.canvasFormat }] 
             },
             primitive: { topology: "triangle-list", cullMode: 'back' },
-            depthStencil: { depthWriteEnabled: true, depthCompare: "less", format: "depth24plus" }
+            depthStencil: { depthWriteEnabled: true, depthCompare: "greater", format: "depth24plus" }
         });
 
         this.initialized = true;

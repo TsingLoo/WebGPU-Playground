@@ -43,8 +43,8 @@ fn main(in: FragmentInput) -> @location(0) vec4f {
     // Define max distance for sky/deep background
     let MAX_DIST = sunLight.volumetric_params.w;
     
-    // If depth is 1.0, it's the skybox. Raymarch up to MAX_DIST
-    let marchDist = select(min(dist, MAX_DIST), MAX_DIST, depth >= 1.0);
+    // If depth is 0.0 (Reverse Z), it's the skybox. Raymarch up to MAX_DIST
+    let marchDist = select(min(dist, MAX_DIST), MAX_DIST, depth <= 0.0);
     let rayDir = rayDirUnnorm / dist;
     
     let NUM_STEPS = u32(max(1.0, sunLight.shadow_params.z));

@@ -28,15 +28,15 @@ fn main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
         camera.view_mat[3]
     ));
 
-    // Unproject from clip space to view space (at far plane)
-    let viewSpace = invProj * vec4f(pos.x, pos.y, 1.0, 1.0);
+    // Unproject from clip space to view space (at far plane, z=0.0 in Reverse Z)
+    let viewSpace = invProj * vec4f(pos.x, pos.y, 0.0, 1.0);
     let viewDir = viewSpace.xyz / viewSpace.w;
 
     // Transform from view space to world space (rotation only)
     let worldDir = (invView * vec4f(viewDir, 0.0)).xyz;
 
     var output: VertexOutput;
-    output.position = vec4f(pos, 1.0, 1.0); // z=1 = far plane (for depth test)
+    output.position = vec4f(pos, 0.0, 1.0); // z=0 = far plane (reverse-z)
     output.localPos = worldDir;
     return output;
 }

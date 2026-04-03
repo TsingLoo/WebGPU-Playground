@@ -77,6 +77,9 @@ export class Camera {
         // note that you can add more variables (e.g. inverse proj matrix) to this buffer in later parts of the assignment
 
         this.projMat = mat4.perspective(toRadians(fovYDegrees), aspectRatio, Camera.nearPlane, Camera.farPlane);
+        // Convert [0, 1] standard Z mapping to Reverse Z [1, 0] mapping
+        this.projMat[10] = -this.projMat[10] - 1.0;
+        this.projMat[14] = -this.projMat[14];
 
         this.rotateCamera(0, 0); // set initial camera vectors
 
