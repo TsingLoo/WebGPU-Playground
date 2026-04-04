@@ -7,6 +7,7 @@ import { Lights } from "./lights";
 import { Scene } from "../engine/Scene";
 import { VSM } from "./vsm";
 import { SSAO } from "./ssao";
+import { SSR } from "./ssr";
 
 export class Stage {
     scene: Scene;
@@ -18,6 +19,7 @@ export class Stage {
     radianceCascades: RadianceCascades;
     vsm: VSM;
     ssao: SSAO;
+    ssr: SSR;
 
     // Sun light
     sunLightBuffer: GPUBuffer;
@@ -44,6 +46,7 @@ export class Stage {
         this.radianceCascades = new RadianceCascades(this.camera, this.environment);
         this.vsm = new VSM(this.camera);
         this.ssao = new SSAO();
+        this.ssr = new SSR();
 
         // Sync sun direction into VSM
         this.vsm.sunDirection = this.sunDirection;

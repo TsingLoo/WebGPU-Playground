@@ -11,10 +11,14 @@ import { DebugPass } from './passes/debug_pass';
 import { DDGIDebugPass } from './passes/ddgi_debug_pass';
 import { ClusteringPass } from './passes/clustering_pass';
 import { HiZPass } from './passes/hiz_pass';
+import { SSRPass } from './passes/ssr_pass';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
     depthTexture: GPUTexture;
     depthTextureView: GPUTextureView;
+
+    sceneColorTexture: GPUTexture;
+    sceneColorTextureView: GPUTextureView;
 
     gBufferAlbedoTexture: GPUTexture;
     gBufferAlbedoTextureView: GPUTextureView;
@@ -48,6 +52,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     debugPass: DebugPass;
     ddgiDebugPass: DDGIDebugPass;
     hizPass: HiZPass;
+    ssrPass: SSRPass;
 
     radianceCascades: RadianceCascades;
     vsm: VSM;
@@ -80,9 +85,17 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.depthTexture = renderer.device.createTexture({
             size: gBufSize,
             format: "depth24plus",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
         });
         this.depthTextureView = this.depthTexture.createView();
+
+        this.sceneColorTexture = renderer.device.createTexture({
+            label: "Scene Color Texture",
+            size: gBufSize,
+            format: "rgba16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
+        });
+        this.sceneColorTextureView = this.sceneColorTexture.createView();
 
         // G-Buffer textures
         this.gBufferAlbedoTexture = renderer.device.createTexture({
@@ -179,6 +192,15 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             hizTextureView: this.hizPass.hizTexture.createView(),
             gBufferNormalView: this.gBufferNormalTextureView,
             ssaoUniformsBuffer: this.stage.ssao.uniformsBuffer,
+        });
+
+        this.ssrPass = new SSRPass({
+            cameraBuffer: this.camera.uniformsBuffer,
+            hizTextureView: this.hizPass.hizTexture.createView(),
+            normalTextureView: this.gBufferNormalTextureView,
+            specularTextureView: this.gBufferSpecularTextureView,
+            depthTextureView: this.depthTextureView,
+            ssrUniformsBuffer: this.stage.ssr.uniformsBuffer,
         });
 
         this.skyboxPass = new SkyboxPass({
@@ -344,17 +366,20 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.ssaoPass.execute(encoder, this.stage.ssao.enabled);
 
         // 9. Sub-class shading pass
-        this.executeShadingPass(encoder, canvasTextureView);
+        this.executeShadingPass(encoder, this.sceneColorTextureView);
 
         // 10. Skybox
-        this.skyboxPass.execute(encoder, canvasTextureView, this.depthTextureView);
+        this.skyboxPass.execute(encoder, this.sceneColorTextureView, this.depthTextureView);
 
-        // 11. Volumetric lighting
+        // 11. SSR & Composite
+        this.ssrPass.execute(encoder, this.stage.ssr.enabled, this.geometryBindGroup, this.sceneColorTextureView, this.gBufferAlbedoTextureView, canvasTextureView);
+
+        // 12. Volumetric lighting
         if (this.stage.sunVolumetricEnabled) {
             this.volumetricPass.execute(encoder, canvasTextureView);
         }
 
-        // 12. Debug bounds
+        // 13. Debug bounds
         if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
             const isDDGI = this.stage.ddgi.enabled;
             const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;

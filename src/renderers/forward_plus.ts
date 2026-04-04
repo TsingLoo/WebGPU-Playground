@@ -189,7 +189,7 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
             }),
             depthStencil: { depthWriteEnabled: false, depthCompare: "greater-equal", format: "depth24plus" },
             vertex: { module: renderer.device.createShaderModule({ code: shaders.buildVertexShader(materialType) }), buffers: [renderer.vertexBufferLayout] },
-            fragment: { module: renderer.device.createShaderModule({ code: shaderSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
+            fragment: { module: renderer.device.createShaderModule({ code: shaderSrc }), entryPoint: "main", targets: [{ format: "rgba16float" }] }
         });
 
         this.shadingPipelineCache.set(variantKey, pipeline);

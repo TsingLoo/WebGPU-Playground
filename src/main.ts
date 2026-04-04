@@ -17,7 +17,7 @@ import { Scene } from './engine/Scene';
 import { Entity } from './engine/Entity';
 import { CameraComponent } from './engine/components/CameraComponent';
 import { DirectionalLightComponent, PointLightComponent, VolumetricFogComponent } from './engine/components/LightComponent';
-import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
+import { VSMShadowComponent, GIComponent, DDGIComponent, RadianceCascadesComponent, SSAOComponent, SSRComponent, PointLightSettingsComponent } from './engine/components/RenderSettingsComponent';
 import { SceneTreeUI } from './engine/SceneTreeUI';
 import { applyComponentSchema } from './engine/RenderSchema';
 import { setupLoaders, loadGltf, loadGltfBuffer, buildVoxelGrid } from './engine/GLTFLoader';
@@ -167,6 +167,10 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     const ssaoComp = new SSAOComponent();
     applyComponentSchema(ssaoComp, 'SSAOComponent', stageObj, globals);
     ppEntity.addComponent(ssaoComp);
+    
+    const ssrComp = new SSRComponent();
+    applyComponentSchema(ssrComp, 'SSRComponent', stageObj, globals);
+    ppEntity.addComponent(ssrComp);
     targetScene.root.addChild(ppEntity);
 }
 
@@ -178,6 +182,13 @@ stats.begin = () => {
     originalStatsBegin();
 
     const now = performance.now();
+
+    avgStats._framesInLastSecond++;
+    if (now - avgStats._lastFPSUpdate >= 500) {
+        avgStats.currentFPS = (avgStats._framesInLastSecond / ((now - avgStats._lastFPSUpdate) / 1000)).toFixed(1);
+        avgStats._framesInLastSecond = 0;
+        avgStats._lastFPSUpdate = now;
+    }
 
     if (avgStats.collecting) {
         const elapsedTime = (now - avgStats.startTime) / 1000; 
@@ -227,6 +238,9 @@ const avgStats = {
     frameCount: 0,
     collecting: false,
     avgFPS_20s: 'Idle',
+    currentFPS: '0.0',
+    _framesInLastSecond: 0,
+    _lastFPSUpdate: performance.now(),
 
     reset: () => {
         avgStats.startTime = performance.now();
@@ -243,6 +257,7 @@ const gui = new GUI();
 const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
+gui.add(avgStats, 'currentFPS').name('Current FPS').listen();
 gui.add(avgStats, 'avgFPS_20s').name('Avg FPS (8s)').listen();
 
 // =========== Point Lights ===========
