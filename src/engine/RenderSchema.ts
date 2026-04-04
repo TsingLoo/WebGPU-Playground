@@ -82,6 +82,11 @@ export const renderSchema: Record<string, ComponentConfig> = {
         targetSystem: 'ssao',
         bindings: ['enabled', 'radius', 'bias', 'power'],
         onUpdate: (stageObj) => stageObj.ssao.updateUniforms()
+    },
+    'SSRComponent': {
+        targetSystem: 'ssr',
+        bindings: ['enabled', 'maxDistance', 'maxSteps', 'thickness', 'debugMode'],
+        onUpdate: (stageObj) => stageObj.ssr.updateUniforms()
     }
 };
 

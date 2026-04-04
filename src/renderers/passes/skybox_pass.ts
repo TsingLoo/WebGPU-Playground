@@ -36,7 +36,7 @@ export class SkyboxPass {
             fragment: {
                 module: renderer.device.createShaderModule({ code: shaders.skyboxFragSrc }),
                 entryPoint: "main",
-                targets: [{ format: renderer.canvasFormat }]
+                targets: [{ format: "rgba16float" }]
             },
             primitive: { topology: "triangle-list", cullMode: "none" },
             depthStencil: { depthWriteEnabled: false, depthCompare: "greater-equal", format: "depth24plus" }

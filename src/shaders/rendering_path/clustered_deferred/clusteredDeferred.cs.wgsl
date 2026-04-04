@@ -9,7 +9,7 @@
 @group(${bindGroup_scene}) @binding(7) var positionTex: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(8) var specularTex: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(9) var depthTex: texture_depth_2d;
-@group(${bindGroup_scene}) @binding(10) var outputTex: texture_storage_2d<rgba8unorm, write>;
+@group(${bindGroup_scene}) @binding(10) var outputTex: texture_storage_2d<rgba16float, write>;
 @group(${bindGroup_scene}) @binding(11) var irradianceMap: texture_cube<f32>;
 @group(${bindGroup_scene}) @binding(12) var prefilteredMap: texture_cube<f32>;
 @group(${bindGroup_scene}) @binding(13) var brdfLut: texture_2d<f32>;

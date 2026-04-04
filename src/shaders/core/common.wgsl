@@ -42,6 +42,7 @@ struct CameraUniforms {
     frame_count: u32,
     _pad1: f32,
     camera_pos: vec4f,
+    inv_view_proj_mat: mat4x4f,
 }
 
 struct ClusterSet {

@@ -75,6 +75,10 @@ import skyboxFragRaw from './environment/skybox.fs.wgsl?raw';
 import ssaoFragRaw from './postprocessing/ssao.fs.wgsl?raw';
 import ssaoBlurFragRaw from './postprocessing/ssao_blur.fs.wgsl?raw';
 
+// SSR shaders
+import ssrFragRaw from './postprocessing/ssr.fs.wgsl?raw';
+import ssrCompositeFragRaw from './postprocessing/ssr_composite.fs.wgsl?raw';
+
 // Volumetric Lighting shaders
 import volumetricLightingVertRaw from './environment/volumetric_lighting.vs.wgsl?raw';
 import volumetricLightingFragRaw from './environment/volumetric_lighting.fs.wgsl?raw';
@@ -251,6 +255,10 @@ export const skyboxFragSrc: string = processShaderRaw(skyboxFragRaw);
 // SSAO shaders (need common)
 export const ssaoFragSrc: string = processShaderRaw(ssaoFragRaw);
 export const ssaoBlurFragSrc: string = processShaderRaw(ssaoBlurFragRaw);
+
+// SSR shaders (need common)
+export const ssrFragSrc: string = processShaderRaw(ssrFragRaw);
+export const ssrCompositeFragSrc: string = processShaderRaw(ssrCompositeFragRaw);
 
 // Volumetric shaders (need common)
 export const volumetricLightingVertSrc: string = processShaderRaw(volumetricLightingVertRaw);
