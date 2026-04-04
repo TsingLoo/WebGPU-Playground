@@ -181,6 +181,13 @@ stats.begin = () => {
 
     const now = performance.now();
 
+    avgStats._framesInLastSecond++;
+    if (now - avgStats._lastFPSUpdate >= 500) {
+        avgStats.currentFPS = (avgStats._framesInLastSecond / ((now - avgStats._lastFPSUpdate) / 1000)).toFixed(1);
+        avgStats._framesInLastSecond = 0;
+        avgStats._lastFPSUpdate = now;
+    }
+
     if (avgStats.collecting) {
         const elapsedTime = (now - avgStats.startTime) / 1000; 
 
@@ -229,6 +236,9 @@ const avgStats = {
     frameCount: 0,
     collecting: false,
     avgFPS_20s: 'Idle',
+    currentFPS: '0.0',
+    _framesInLastSecond: 0,
+    _lastFPSUpdate: performance.now(),
 
     reset: () => {
         avgStats.startTime = performance.now();
@@ -245,6 +255,7 @@ const gui = new GUI();
 const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
+gui.add(avgStats, 'currentFPS').name('Current FPS').listen();
 gui.add(avgStats, 'avgFPS_20s').name('Avg FPS (8s)').listen();
 
 // =========== Point Lights ===========

@@ -107,4 +107,14 @@ export class SSRComponent extends Component {
     public maxDistance: number = 100.0;
     public maxSteps: number = 64;
     public thickness: number = 0.5;
+    public debugMode: number = 0;
+
+    public getUIOptions(): Record<string, any[]> {
+        return {
+            debugMode: [
+                { label: 'Off', value: 0 },
+                { label: 'Show SSR Hit', value: 1 }
+            ]
+        };
+    }
 }
