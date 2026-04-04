@@ -85,7 +85,7 @@ export const renderSchema: Record<string, ComponentConfig> = {
     },
     'SSRComponent': {
         targetSystem: 'ssr',
-        bindings: ['enabled', 'maxDistance', 'maxSteps', 'thickness'],
+        bindings: ['enabled', 'maxDistance', 'maxSteps', 'thickness', 'debugMode'],
         onUpdate: (stageObj) => stageObj.ssr.updateUniforms()
     }
 };

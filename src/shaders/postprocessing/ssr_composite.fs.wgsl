@@ -18,6 +18,15 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
     let baseColor = textureLoad(sceneColorTexture, uvCoords, 0);
     
     let ssrHit = textureLoad(ssrHitTexture, uvCoords, 0);
+    
+    // If debug mode is enabled, visually mask out missed pixels vs hit pixels
+    if (ssrHit.b > 0.5) {
+        if (ssrHit.a <= 0.0) {
+            return vec4f(0.0, 0.0, 0.0, 1.0); // Show black for ray misses to contrast against hits
+        }
+        return vec4f(ssrHit.x, ssrHit.y, 0.0, 1.0);
+    }
+
     if (ssrHit.a <= 0.0) {
         return baseColor;
     }
@@ -34,8 +43,11 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
     
     let normal = normalize(textureLoad(normalTexture, uvCoords, 0).xyz);
     
-    // View vector
-    let clipPos = vec4f(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, depth, 1.0);
+    // Compute UV from framebuffer coords (y=0 at top) — NOT in.uv (y=0 at bottom)
+    let screenDims = vec2f(textureDimensions(depthTexture));
+    let uv = vec2f(uvCoords) / screenDims;
+
+    let clipPos = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     let worldPosV = camera.inv_view_proj_mat * clipPos;
     let worldPos = worldPosV.xyz / worldPosV.w;
     

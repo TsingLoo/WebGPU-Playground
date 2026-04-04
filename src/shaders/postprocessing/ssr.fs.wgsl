@@ -4,7 +4,7 @@ struct SSRUniforms {
     resolutionScale: f32,
     maxSteps: f32,
     thickness: f32,
-    pad0: f32,
+    debugMode: f32,
     pad1: f32,
     pad2: f32,
 };
@@ -62,10 +62,14 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
         return vec4f(0.0);
     }
 
+    // Compute UV from framebuffer coordinates (y=0 at top, like textureLoad convention)
+    // NOT from in.uv which has y=0 at bottom (NDC convention from the blit vertex shader)
+    let screenSize = vec2f(textureDimensions(depthTexture));
+    let uv = in.position.xy / screenSize;
+
     let normal = normalize(textureLoad(normalTexture, vec2i(in.position.xy), 0).xyz);
-    let viewPos = getViewPosition(in.uv, depth);
+    let viewPos = getViewPosition(uv, depth);
     let viewDir = normalize(viewPos);
-    
     // View space normal
     let viewNormal = normalize((camera.view_mat * vec4f(normal, 0.0)).xyz);
     
@@ -79,9 +83,26 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
 
     // Ray marching in View Space / Screen Space
     let maxDistance = ssrUniforms.maxDistance;
-    let endViewPos = viewPos + reflDirView * maxDistance;
+    var endViewPos = viewPos + reflDirView * maxDistance;
     
-    let startFrag = projectViewToScreen(viewPos);
+    // Prevent ray from going behind the near plane.
+    // In WebGPU right-handed view space, camera looks down -Z.
+    // If endViewPos.z > -0.1, it crossed the near plane, which would cause clipPos.w <= 0 and flip the projected NDC.
+    let nearPlaneZ = -0.1;
+    if (endViewPos.z > nearPlaneZ) {
+        if (reflDirView.z > 0.0001) {
+            let t = (nearPlaneZ - viewPos.z) / reflDirView.z;
+            endViewPos = viewPos + reflDirView * t;
+        } else {
+            return vec4f(0.0);
+        }
+    }
+    
+    // Bias ray origin along view-space normal to prevent self-intersection.
+    // Without this, the ray immediately hits the surface it started from
+    // because the interpolated screen-space Z diverges from the actual surface depth.
+    let biasedViewPos = viewPos + viewNormal * 0.1;
+    let startFrag = projectViewToScreen(biasedViewPos);
     let endFrag = projectViewToScreen(endViewPos);
     
     let delta = endFrag - startFrag;
@@ -89,6 +110,10 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
     // Convert to pixel space
     let texSize = vec2f(textureDimensions(depthTexture));
     let texDelta = delta.xy * texSize;
+    if (abs(texDelta.x) < 0.001 && abs(texDelta.y) < 0.001) {
+        return vec4f(0.0);
+    }
+    
     let useX = abs(texDelta.x) >= abs(texDelta.y);
     var deltaStep: f32;
     if (useX) {
@@ -106,11 +131,16 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
     // A true Hi-Z uses quadtrees, here we do a fast linear search through the top mip
     // with fixed thickness check.
     
-    var currentT = advance;
+    // Skip a few initial steps to further avoid self-intersection on large flat surfaces
+    var currentT = advance * 3.0;
     let maxSteps = i32(ssrUniforms.maxSteps);
     let thickness = ssrUniforms.thickness;
     
     for (var i = 0; i < maxSteps; i++) {
+        if (currentT > 1.0) {
+            break;
+        }
+        
         rayP = startFrag + delta * currentT;
         if (rayP.x < 0.0 || rayP.x > 1.0 || rayP.y < 0.0 || rayP.y > 1.0 || rayP.z < 0.0) {
              break;
@@ -139,13 +169,12 @@ fn main(in: VertexOutput) -> @location(0) vec4f {
     }
 
     if (hit) {
-        // Return Hit UV in R and G, and a valid mask in A
-        // Fade out at edges
+        // Return Hit UV in R and G, debugMode in B, and a valid mask in A
         let edgeFade = smoothstep(0.0, 0.1, hitUV.x) * smoothstep(1.0, 0.9, hitUV.x) *
                        smoothstep(0.0, 0.1, hitUV.y) * smoothstep(1.0, 0.9, hitUV.y);
         
-        return vec4f(hitUV.x, hitUV.y, 0.0, edgeFade);
+        return vec4f(hitUV.x, hitUV.y, ssrUniforms.debugMode, edgeFade);
     }
 
-    return vec4f(0.0);
+    return vec4f(0.0, 0.0, ssrUniforms.debugMode, 0.0);
 }
