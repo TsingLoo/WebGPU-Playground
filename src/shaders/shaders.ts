@@ -74,6 +74,8 @@ import skyboxFragRaw from './environment/skybox.fs.wgsl?raw';
 // SSAO shaders
 import ssaoFragRaw from './postprocessing/ssao.fs.wgsl?raw';
 import ssaoBlurFragRaw from './postprocessing/ssao_blur.fs.wgsl?raw';
+import reprojectionComputeRaw from './postprocessing/reprojection.cs.wgsl?raw';
+import depthCopyFragRaw from './postprocessing/depth_copy.fs.wgsl?raw';
 
 // Volumetric Lighting shaders
 import volumetricLightingVertRaw from './environment/volumetric_lighting.vs.wgsl?raw';
@@ -251,6 +253,10 @@ export const skyboxFragSrc: string = processShaderRaw(skyboxFragRaw);
 // SSAO shaders (need common)
 export const ssaoFragSrc: string = processShaderRaw(ssaoFragRaw);
 export const ssaoBlurFragSrc: string = processShaderRaw(ssaoBlurFragRaw);
+
+// Reprojection / Frame Warp shader (standalone — no common prepend needed, self-contained structs)
+export const reprojectionComputeSrc: string = reprojectionComputeRaw;
+export const depthCopyFragSrc: string = processShaderRaw(depthCopyFragRaw);
 
 // Volumetric shaders (need common)
 export const volumetricLightingVertSrc: string = processShaderRaw(volumetricLightingVertRaw);

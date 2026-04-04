@@ -33,6 +33,7 @@ export class Stage {
     sunEnabled: boolean = true;
 
     showGIBounds: boolean = false;
+    frameWarpEnabled: boolean = false;
 
     constructor(scene: Scene, lights: Lights, camera: Camera, stats: Stats, environment: Environment) {
         this.scene = scene;

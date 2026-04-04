@@ -11,6 +11,7 @@ import { DebugPass } from './passes/debug_pass';
 import { DDGIDebugPass } from './passes/ddgi_debug_pass';
 import { ClusteringPass } from './passes/clustering_pass';
 import { HiZPass } from './passes/hiz_pass';
+import { ReprojectionPass } from './passes/reprojection_pass';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
     depthTexture: GPUTexture;
@@ -48,6 +49,10 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     debugPass: DebugPass;
     ddgiDebugPass: DDGIDebugPass;
     hizPass: HiZPass;
+    reprojectionPass: ReprojectionPass;
+
+    sceneColorTexture: GPUTexture;
+    sceneColorTextureView: GPUTextureView;
 
     radianceCascades: RadianceCascades;
     vsm: VSM;
@@ -200,13 +205,49 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
 
         this.ddgiDebugPass = new DDGIDebugPass();
+
+        // ============================
+        // Frame Warp: intermediate scene color + reprojection pass
+        // ============================
+        this.sceneColorTexture = renderer.device.createTexture({
+            label: "scene color (intermediate for frame warp)",
+            size: gBufSize,
+            format: renderer.canvasFormat,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        });
+        this.sceneColorTextureView = this.sceneColorTexture.createView();
+
+        this.reprojectionPass = new ReprojectionPass({
+            reprojUniformBuffer: this.camera.reprojUniformsBuffer,
+        });
     }
 
     // ==== Template Method Architecture ====
 
     override draw() {
+        // Sync frame warp enabled state from stage → camera
+        this.camera.frameWarpEnabled = this.stage.frameWarpEnabled;
+
+        const warpEnabled = this.stage.frameWarpEnabled;
         const encoder = renderer.device.createCommandEncoder();
         const canvasTextureView = renderer.context.getCurrentTexture().createView();
+
+        // ============================
+        // PHASE 0: Frame Warp — warp previous frame's history to latest camera input
+        // This happens FIRST so the user sees the lowest-latency image ASAP.
+        // ============================
+        if (warpEnabled) {
+            this.reprojectionPass.executeWarpAndBlit(encoder, canvasTextureView);
+        }
+
+        // Determine the render target for the full scene rendering.
+        // When warp is enabled: render to offscreen sceneColorTexture (becomes next frame's history)
+        // When warp is disabled: render directly to canvas as before
+        const renderTarget = warpEnabled ? this.sceneColorTextureView : canvasTextureView;
+
+        // ============================
+        // PHASE 1: Full scene rendering pipeline (same as before, but targeting renderTarget)
+        // ============================
 
         // 1. Update active sun light
         this.stage.updateSunLight();
@@ -343,15 +384,15 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         // 8. SSAO
         this.ssaoPass.execute(encoder, this.stage.ssao.enabled);
 
-        // 9. Sub-class shading pass
-        this.executeShadingPass(encoder, canvasTextureView);
+        // 9. Sub-class shading pass (renders to renderTarget)
+        this.executeShadingPass(encoder, renderTarget);
 
         // 10. Skybox
-        this.skyboxPass.execute(encoder, canvasTextureView, this.depthTextureView);
+        this.skyboxPass.execute(encoder, renderTarget, this.depthTextureView);
 
         // 11. Volumetric lighting
         if (this.stage.sunVolumetricEnabled) {
-            this.volumetricPass.execute(encoder, canvasTextureView);
+            this.volumetricPass.execute(encoder, renderTarget);
         }
 
         // 12. Debug bounds
@@ -360,16 +401,27 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
             const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
             const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
-            this.debugPass.execute(encoder, canvasTextureView, this.depthTextureView, this.geometryBindGroup, minPos, maxPos, color);
+            this.debugPass.execute(encoder, renderTarget, this.depthTextureView, this.geometryBindGroup, minPos, maxPos, color);
         }
 
         // 13. DDGI Probes
         if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
-            this.ddgiDebugPass.execute(encoder, canvasTextureView, this.depthTextureView, {
+            this.ddgiDebugPass.execute(encoder, renderTarget, this.depthTextureView, {
                 cameraBindGroupLayout: this.geometryBindGroupLayout,
                 cameraBindGroup: this.geometryBindGroup,
                 ddgi: this.stage.ddgi
             });
+        }
+
+        // ============================
+        // PHASE 2: Post-render — copy scene to history / blit to canvas
+        // ============================
+        if (warpEnabled) {
+            // Copy the just-rendered scene color + depth into history for next frame's warp
+            this.reprojectionPass.copyToHistory(encoder, this.sceneColorTexture, this.depthTextureView);
+        } else {
+            // Warp disabled but rendering went to sceneColor? No — renderTarget IS canvasTextureView.
+            // Nothing extra needed.
         }
 
         renderer.device.queue.submit([encoder.finish()]);

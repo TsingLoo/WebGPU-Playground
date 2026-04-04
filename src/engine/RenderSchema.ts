@@ -82,6 +82,12 @@ export const renderSchema: Record<string, ComponentConfig> = {
         targetSystem: 'ssao',
         bindings: ['enabled', 'radius', 'bias', 'power'],
         onUpdate: (stageObj) => stageObj.ssao.updateUniforms()
+    },
+    'FrameWarpComponent': {
+        targetSystem: '',
+        bindings: [
+            { compKey: 'enabled', stageKey: 'frameWarpEnabled' }
+        ]
     }
 };
 

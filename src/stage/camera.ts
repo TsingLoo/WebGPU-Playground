@@ -44,9 +44,55 @@ class CameraUniforms {
     }
 }
 
+// ============================
+// Frame Warp Reprojection Uniforms
+// Layout: prevViewProj(64) + currInvViewProj(64) + screenDims(8) + warpEnabled(4) + pad(4) = 144 bytes
+// Padded to 160 for 16-byte alignment
+// ============================
+class ReprojectionUniforms {
+    readonly buffer = new ArrayBuffer(160);
+    private readonly floatView = new Float32Array(this.buffer);
+    private readonly uintView = new Uint32Array(this.buffer);
+
+    set prevViewProjMat(mat: Float32Array) {
+        this.floatView.set(mat, 0);    // offset 0: 16 floats
+    }
+
+    set currInvViewProjMat(mat: Float32Array) {
+        this.floatView.set(mat, 16);   // offset 64 bytes: 16 floats
+    }
+
+    set screenWidth(value: number) {
+        this.floatView[32] = value;    // offset 128 bytes
+    }
+
+    set screenHeight(value: number) {
+        this.floatView[33] = value;    // offset 132 bytes
+    }
+
+    set warpEnabled(value: number) {
+        this.uintView[34] = value;     // offset 136 bytes
+    }
+
+    set nearPlane(value: number) {
+        this.floatView[35] = value;    // offset 140 bytes
+    }
+
+    set farPlane(value: number) {
+        this.floatView[36] = value;    // offset 144 bytes
+    }
+}
+
 export class Camera {
     uniforms: CameraUniforms = new CameraUniforms();
     uniformsBuffer: GPUBuffer;
+
+    // Frame Warp: reprojection state
+    reprojUniforms: ReprojectionUniforms = new ReprojectionUniforms();
+    reprojUniformsBuffer: GPUBuffer;
+    private prevViewProjMat: Mat4 = mat4.identity();
+    private hasHistory: boolean = false;
+    frameWarpEnabled: boolean = false;
 
     projMat: Mat4 = mat4.create();
     cameraPos: Vec3 = vec3.create(-7, 2, 0);
@@ -75,6 +121,13 @@ export class Camera {
         // check `lights.ts` for examples of using `device.createBuffer()`
         //
         // note that you can add more variables (e.g. inverse proj matrix) to this buffer in later parts of the assignment
+
+        // Frame Warp: reprojection uniform buffer
+        this.reprojUniformsBuffer = device.createBuffer({
+            label: "reprojection uniforms",
+            size: this.reprojUniforms.buffer.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
 
         this.projMat = mat4.perspective(toRadians(fovYDegrees), aspectRatio, Camera.nearPlane, Camera.farPlane);
         // Convert [0, 1] standard Z mapping to Reverse Z [1, 0] mapping
@@ -168,6 +221,24 @@ export class Camera {
         const lookPos = vec3.add(this.cameraPos, vec3.scale(this.cameraFront, 1));
         const viewMat = mat4.lookAt(this.cameraPos, lookPos, [0, 1, 0]);
         const viewProjMat = mat4.mul(this.projMat, viewMat);
+
+        // Frame Warp: update reprojection uniforms BEFORE overwriting current VP
+        // prevViewProjMat = the VP that was used to render the history buffer
+        // currInvViewProj = inverse of the LATEST VP (reflecting latest mouse input)
+        const currInvViewProj = mat4.invert(viewProjMat);
+        this.reprojUniforms.prevViewProjMat = this.prevViewProjMat as Float32Array;
+        this.reprojUniforms.currInvViewProjMat = currInvViewProj as Float32Array;
+        this.reprojUniforms.screenWidth = canvas.width;
+        this.reprojUniforms.screenHeight = canvas.height;
+        this.reprojUniforms.warpEnabled = (this.frameWarpEnabled && this.hasHistory) ? 1 : 0;
+        this.reprojUniforms.nearPlane = Camera.nearPlane;
+        this.reprojUniforms.farPlane = Camera.farPlane;
+        device.queue.writeBuffer(this.reprojUniformsBuffer, 0, this.reprojUniforms.buffer);
+
+        // Save current VP as history for next frame
+        mat4.copy(viewProjMat, this.prevViewProjMat);
+        this.hasHistory = true;
+
         // TODO-1.1: set `this.uniforms.viewProjMat` to the newly calculated view proj mat
         this.uniforms.viewProjMat = viewProjMat;
         this.uniforms.inverseProjMat = mat4.invert(this.projMat);

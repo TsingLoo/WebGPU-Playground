@@ -101,3 +101,7 @@ export class SSAOComponent extends Component {
     public bias: number = 0.025;
     public power: number = 1.0;
 }
+
+export class FrameWarpComponent extends Component {
+    public enabled: boolean = false;
+}
