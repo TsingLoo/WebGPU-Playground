@@ -475,7 +475,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                     size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1],
                     format: 'rgba8unorm',
                     dimension: '2d',
-                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
                 });
 
                 device.queue.copyExternalImageToTexture(
