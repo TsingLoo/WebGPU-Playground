@@ -123,9 +123,9 @@ export class Scene {
         newLayerCount: number
     ) {
         // --- Merge Global Material Buffer ---
-        const combinedMaterials = new Float32Array(this.materialCount * 8 + newCount * 8);
+        const combinedMaterials = new Float32Array(this.materialCount * 12 + newCount * 12);
         combinedMaterials.set(this.materialDataArray);
-        combinedMaterials.set(newMaterialData, this.materialCount * 8);
+        combinedMaterials.set(newMaterialData, this.materialCount * 12);
 
         this.materialDataArray = combinedMaterials;
         this.materialCount += newCount;
