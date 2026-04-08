@@ -7,6 +7,7 @@ import { initWebGPU, Renderer, device } from './renderer';
 
 import { ForwardPlusRenderer } from './renderers/forward_plus';
 import { ClusteredDeferredRenderer } from './renderers/clustered_deferred';
+import { WavefrontPathTracingRenderer } from './renderers/path_tracing_wavefront';
 
 // @ts-ignore
 import parseHdr from 'parse-hdr';
@@ -254,7 +255,11 @@ const avgStats = {
 const gui = new GUI();
 
 // =========== Render Mode (top-level) ===========
-const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
+const renderModes = {
+    forwardPlus: 'forward+',
+    clusteredDeferred: 'clustered deferred',
+    pathTracing: 'path tracing'
+};
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
 gui.add(avgStats, 'currentFPS').name('Current FPS').listen();
@@ -287,8 +292,49 @@ function setRenderer(mode: string) {
         case renderModes.clusteredDeferred:
             renderer = new ClusteredDeferredRenderer(stage);
             break;
+        case renderModes.pathTracing:
+            renderer = new WavefrontPathTracingRenderer(stage);
+            // Wire up GUI controls to the WPT renderer
+            ptSampleCountController?.listen();
+            break;
     }
 }
+
+// =========== Path Tracing GUI ===========
+const ptFolder = gui.addFolder('Path Tracing');
+const ptConfig = { maxBounces: 4, clampRadiance: 10.0, pixelScale: 1.0, sampleCount: 0, reset: () => {} };
+
+ptFolder.add(ptConfig, 'maxBounces', 1, 8, 1).name('Max Bounces').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.maxBounces = v; r.resetAccumulation(); }
+});
+ptFolder.add(ptConfig, 'clampRadiance', 1.0, 50.0, 0.5).name('Clamp Radiance').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.clampRadiance = v; }
+});
+ptFolder.add(ptConfig, 'pixelScale', 0.25, 1.0, 0.25).name('Pixel Scale').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.pixelScale = v; }
+});
+const ptSampleCountController = ptFolder.add(ptConfig, 'sampleCount').name('Samples').listen();
+ptFolder.add({ reset: () => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'resetAccumulation' in r) {
+        r.resetAccumulation();
+        ptConfig.sampleCount = 0;
+    }
+}}, 'reset').name('Reset Accumulation');
+
+// Sync sampleCount display each animation frame
+function syncPTStats() {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'sampleCount' in r) {
+        ptConfig.sampleCount = r.sampleCount;
+    }
+    requestAnimationFrame(syncPTStats);
+}
+syncPTStats();
+
 
 renderModeController.onChange(setRenderer);
 

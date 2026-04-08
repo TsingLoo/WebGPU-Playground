@@ -58,6 +58,16 @@ import surfelGridRaw from './gi/surfel/surfel_grid.cs.wgsl?raw';
 import surfelIntegratorRaw from './gi/surfel/surfel_integrator.cs.wgsl?raw';
 import surfelResolveRaw from './gi/surfel/surfel_resolve.cs.wgsl?raw';
 
+// Path Tracing (Wavefront) shaders
+import ptCommonRaw from './gi/path_tracing/pt_common.wgsl?raw';
+import ptRayGenRaw from './gi/path_tracing/ray_gen.cs.wgsl?raw';
+import ptIntersectRaw from './gi/path_tracing/intersect.cs.wgsl?raw';
+import ptShadeRaw from './gi/path_tracing/shade.cs.wgsl?raw';
+import ptShadowTestRaw from './gi/path_tracing/shadow_test.cs.wgsl?raw';
+import ptMissRaw from './gi/path_tracing/miss.cs.wgsl?raw';
+import ptAccumulateRaw from './gi/path_tracing/accumulate.cs.wgsl?raw';
+import ptTonemapRaw from './gi/path_tracing/pt_tonemap.wgsl?raw';
+
 // Shadow shaders
 import shadowVertRaw from './shadows/shadow.vs.wgsl?raw';
 import shadowFragRaw from './shadows/shadow.fs.wgsl?raw';
@@ -306,3 +316,34 @@ export const surfelLifecycleSrc: string = processSurfelShaderRaw(surfelLifecycle
 export const surfelGridSrc: string = processSurfelShaderRaw(surfelGridRaw);
 export const surfelIntegratorSrc: string = processSurfelShaderRaw(surfelIntegratorRaw);
 export const surfelResolveSrc: string = processSurfelShaderRaw(surfelResolveRaw);
+
+// ===========================================================================
+// Path Tracing (Wavefront) shaders
+// ===========================================================================
+const ptCommonSrc: string = evalShaderRaw(ptCommonRaw);
+
+// Builds a complete PT compute shader: common + bvh + pt_common + shader_body
+function processPTShaderRaw(raw: string): string {
+    return commonSrc + bvhSrc + ptCommonSrc + evalShaderRaw(raw);
+}
+
+// RayGen only needs camera + pt_common (no BVH)
+export const ptRayGenSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptRayGenRaw);
+
+// Intersection needs BVH
+export const ptIntersectSrc: string = processPTShaderRaw(ptIntersectRaw);
+
+// Shade needs pt_common (for material/RNG helpers) + sun light structs from common
+export const ptShadeSrc: string = processPTShaderRaw(ptShadeRaw);
+
+// Shadow test needs BVH
+export const ptShadowTestSrc: string = processPTShaderRaw(ptShadowTestRaw);
+
+// Miss only needs pt_common (no BVH)
+export const ptMissSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptMissRaw);
+
+// Accumulate: no BVH, no RNG
+export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptAccumulateRaw);
+
+// Tonemap: standalone (vertex + fragment in one file, split by entry points)
+export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTonemapRaw);

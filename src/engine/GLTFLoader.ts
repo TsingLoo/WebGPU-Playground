@@ -9,7 +9,6 @@ import { registerLoaders, load, parse } from '@loaders.gl/core';
 import { GLTFLoader, GLTFWithBuffers, GLTFMesh, GLTFMeshPrimitive, GLTFMaterial, GLTFSampler } from '@loaders.gl/gltf';
 import { ImageLoader } from '@loaders.gl/images';
 import { mat4 } from 'wgpu-matrix';
-import { BVHData, buildBVHFromScene } from '../stage/bvh_builder';
 import { Entity } from './Entity';
 import { MeshRenderer } from './components/MeshRenderer';
 import { device, globalUniformPool, materialBindGroupLayout } from '../renderer';
@@ -386,17 +385,17 @@ export class GLTFResult {
     }
 }
 
-export async function loadGltfBuffer(buffer: ArrayBuffer, matOffset: number = 0, layerOffset: number = 0, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+export async function loadGltfBuffer(buffer: ArrayBuffer, matOffset: number = 0, layerOffset: number = 0): Promise<GLTFResult> {
     const gltfWithBuffers = await parse(buffer, GLTFLoader) as unknown as GLTFWithBuffers;
-    return processGltf(gltfWithBuffers, matOffset, layerOffset, params);
+    return processGltf(gltfWithBuffers, matOffset, layerOffset);
 }
 
-export async function loadGltf(filePath: string, matOffset: number = 0, layerOffset: number = 0, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+export async function loadGltf(filePath: string, matOffset: number = 0, layerOffset: number = 0): Promise<GLTFResult> {
     const gltfWithBuffers = await load(filePath) as GLTFWithBuffers;
-    return processGltf(gltfWithBuffers, matOffset, layerOffset, params);
+    return processGltf(gltfWithBuffers, matOffset, layerOffset);
 }
 
-async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number, params: GLTFLoaderParams): Promise<GLTFResult> {
+async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number): Promise<GLTFResult> {
 
         const gltf = gltfWithBuffers.json;
 
@@ -501,10 +500,18 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
 
         let sceneMaterials: Material[] = [];
         const materialCount = Math.max(1, gltf.materials?.length ?? 0);
-        let materialDataArray: Float32Array = new Float32Array(materialCount * 8); // 8 floats per material (32 bytes)
+        // 12 floats per material (48 bytes):
+        // [0-3]: baseColorFactor (rgba)
+        // [4]:   roughness
+        // [5]:   metallic
+        // [6]:   texLayer (i32 bitcast)
+        // [7]:   transmission (0=opaque, 1=fully transmissive; KHR_materials_transmission)
+        // [8]:   ior (e.g. 1.5 for glass; KHR_materials_ior)
+        // [9-11]: emissiveFactor (rgb; KHR_materials_emissive_strength or core gltf)
+        let materialDataArray: Float32Array = new Float32Array(materialCount * 12);
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
-        let defaultMetallic = 1.0;
+        let defaultMetallic = 0.0;
 
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
@@ -516,22 +523,40 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 }
                 sceneMaterials.push(currentMat);
                 
-                // Pack for global materials buffer
+                // Pack PBR base properties
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
                 let texLayer = getBaseColorImageLayer(gltfMaterial);
                 if (texLayer >= 0) texLayer += layerOffset;
 
-                materialDataArray[i * 8 + 0] = baseColorFactor[0] ?? 1.0;
-                materialDataArray[i * 8 + 1] = baseColorFactor[1] ?? 1.0;
-                materialDataArray[i * 8 + 2] = baseColorFactor[2] ?? 1.0;
-                materialDataArray[i * 8 + 3] = baseColorFactor[3] ?? 1.0;
-                materialDataArray[i * 8 + 4] = roughness;
-                materialDataArray[i * 8 + 5] = metallic;
-                // Use bitwise cast: store i32 layer index as f32 bits
-                new Int32Array(materialDataArray.buffer, (i * 8 + 6) * 4, 1)[0] = texLayer;
-                materialDataArray[i * 8 + 7] = 0.0; // pad
+                // KHR_materials_transmission: transmissionFactor (0-1)
+                const transmissionExt = (gltfMaterial as any).extensions?.KHR_materials_transmission;
+                const transmission: number = transmissionExt?.transmissionFactor ?? 0.0;
+
+                // KHR_materials_ior: IOR value (default 1.5 for glass)
+                const iorExt = (gltfMaterial as any).extensions?.KHR_materials_ior;
+                const ior: number = iorExt?.ior ?? 1.5;
+
+                // Emissive factor (core glTF 2.0 + KHR_materials_emissive_strength)
+                const emissiveFactor: number[] = (gltfMaterial as any).emissiveFactor ?? [0.0, 0.0, 0.0];
+                const emissiveStrengthExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
+                const emissiveStrength: number = emissiveStrengthExt?.emissiveStrength ?? 1.0;
+
+                const base = i * 12;
+                materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
+                materialDataArray[base + 1] = baseColorFactor[1] ?? 1.0;
+                materialDataArray[base + 2] = baseColorFactor[2] ?? 1.0;
+                materialDataArray[base + 3] = baseColorFactor[3] ?? 1.0;
+                materialDataArray[base + 4] = roughness;
+                materialDataArray[base + 5] = metallic;
+                // Store i32 layer index as f32 bits for texture array lookup
+                new Int32Array(materialDataArray.buffer, (base + 6) * 4, 1)[0] = texLayer;
+                materialDataArray[base + 7] = transmission;
+                materialDataArray[base + 8] = ior;
+                materialDataArray[base + 9]  = emissiveFactor[0] * emissiveStrength;
+                materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
+                materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
             }
         }
 
