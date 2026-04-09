@@ -626,8 +626,14 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 materialDataArray[base + 9]  = emissiveFactor[0] * emissiveStrength;
                 materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
                 materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
+                let alphaModeEnum = 0; // OPAQUE
+                if (gltfMaterial.alphaMode === "MASK") alphaModeEnum = 1;
+                else if (gltfMaterial.alphaMode === "BLEND") alphaModeEnum = 2;
+
                 new Int32Array(materialDataArray.buffer, (base + 12) * 4, 1)[0] = normalTexLayer;
                 new Int32Array(materialDataArray.buffer, (base + 13) * 4, 1)[0] = mrTexLayer;
+                materialDataArray[base + 14] = gltfMaterial.alphaCutoff ?? 0.5;
+                new Uint32Array(materialDataArray.buffer, (base + 15) * 4, 1)[0] = alphaModeEnum;
             }
         }
 

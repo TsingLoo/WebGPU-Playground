@@ -131,8 +131,14 @@ export class Scene {
         const FLOATS_PER_MAT = 16;
         // --- Merge Global Material Buffer ---
         const combinedMaterials = new Float32Array(this.materialCount * FLOATS_PER_MAT + newCount * FLOATS_PER_MAT);
-        combinedMaterials.set(this.materialDataArray);
-        combinedMaterials.set(newMaterialData, this.materialCount * FLOATS_PER_MAT);
+        
+        // Use Int32Array view to precisely copy bit patterns without triggering JS NaN-normalization
+        const combinedIntView = new Int32Array(combinedMaterials.buffer);
+        const oldIntView = new Int32Array(this.materialDataArray.buffer);
+        const newIntView = new Int32Array(newMaterialData.buffer);
+
+        combinedIntView.set(oldIntView);
+        combinedIntView.set(newIntView, this.materialCount * FLOATS_PER_MAT);
 
         this.materialDataArray = combinedMaterials;
         this.materialCount += newCount;

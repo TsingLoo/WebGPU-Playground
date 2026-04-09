@@ -58,7 +58,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             final_alpha *= tex_col.w;
         }
 
-        if (final_alpha >= 0.5) {
+        if (mat.alpha_mode == 0u || final_alpha >= mat.alpha_cutoff) {
             // Opaque hit — shadow is blocked
             occluded = true;
             break;
