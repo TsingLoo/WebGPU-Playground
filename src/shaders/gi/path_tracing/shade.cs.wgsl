@@ -1,6 +1,7 @@
 // shade.cs.wgsl
 // Wavefront Path Tracing — Pass 3: Material Shading + NEE
 // Full PBR with normal mapping + metallic-roughness texture support.
+// Reconstructs pos/uv/normal/tangent from compact HitRecord + BVH buffers.
 
 @group(0) @binding(0)  var<uniform>             camera:             CameraUniforms;
 @group(0) @binding(1)  var<uniform>             pt:                 PTUniforms;
@@ -11,11 +12,13 @@
 @group(0) @binding(6)  var<storage, read>        materials:          array<vec4f>;
 @group(0) @binding(7)  var<uniform>              sun_light:          SunLight;
 @group(0) @binding(8)  var                       base_color_tex:     texture_2d_array<f32>;
-@group(0) @binding(9)  var                       base_color_sampler: sampler;
+@group(0) @binding(9)  var                       tex_sampler:        sampler;
 @group(0) @binding(10) var                       normal_map_tex:     texture_2d_array<f32>;
-@group(0) @binding(11) var                       normal_map_sampler: sampler;
-@group(0) @binding(12) var                       mr_tex:             texture_2d_array<f32>;
-@group(0) @binding(13) var                       mr_sampler:         sampler;
+@group(0) @binding(11) var                       mr_tex:             texture_2d_array<f32>;
+// BVH vertex data for reconstructing hit attributes
+@group(0) @binding(12) var<storage, read>        bvh_uvs:            array<vec4f>;
+@group(0) @binding(13) var<storage, read>        bvh_normals:        array<vec4f>;
+@group(0) @binding(14) var<storage, read>        bvh_tangents:       array<vec4f>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -41,11 +44,45 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
 
+    // ============================================================
+    // Reconstruct hit attributes from BVH + compact HitRecord
+    // ============================================================
+    let bw = vec3f(hit.bary.x, hit.bary.y, 1.0 - hit.bary.x - hit.bary.y);
+
+    // Position: from ray parametric
+    let hit_pos = ray.origin + ray.direction * hit.dist;
+
+    // UV interpolation
+    let uv0 = bvh_uvs[hit.idx0].xy;
+    let uv1 = bvh_uvs[hit.idx1].xy;
+    let uv2 = bvh_uvs[hit.idx2].xy;
+    let hit_uv = bw.x * uv0 + bw.y * uv1 + bw.z * uv2;
+
+    // Smooth normal interpolation
+    let n0 = bvh_normals[hit.idx0].xyz;
+    let n1 = bvh_normals[hit.idx1].xyz;
+    let n2 = bvh_normals[hit.idx2].xyz;
+    var smooth_N = normalize(bw.x * n0 + bw.y * n1 + bw.z * n2);
+    // Ensure normal faces the incoming ray
+    if (dot(smooth_N, ray.direction) > 0.0) {
+        smooth_N = -smooth_N;
+    }
+
+    // Tangent interpolation
+    let t0 = bvh_tangents[hit.idx0];
+    let t1 = bvh_tangents[hit.idx1];
+    let t2 = bvh_tangents[hit.idx2];
+    let interp_tangent_dir = normalize(bw.x * t0.xyz + bw.y * t1.xyz + bw.z * t2.xyz);
+    let handedness = t0.w; // same for all verts of a triangle
+
+    // ============================================================
+    // Material evaluation
+    // ============================================================
     let mat = unpackPTMaterial(&materials, hit.mat_id);
 
     var albedo = mat.albedo;
     if (mat.tex_layer >= 0) {
-        let tex_col = textureSampleLevel(base_color_tex, base_color_sampler, hit.uv, mat.tex_layer, 0.0);
+        let tex_col = textureSampleLevel(base_color_tex, tex_sampler, hit_uv, mat.tex_layer, 0.0);
         albedo *= tex_col.xyz;
     }
 
@@ -53,7 +90,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var roughness = mat.roughness;
     var metallic  = mat.metallic;
     if (mat.mr_tex_layer >= 0) {
-        let mr_sample = textureSampleLevel(mr_tex, mr_sampler, hit.uv, mat.mr_tex_layer, 0.0);
+        let mr_sample = textureSampleLevel(mr_tex, tex_sampler, hit_uv, mat.mr_tex_layer, 0.0);
         // glTF spec: G = roughness, B = metallic
         roughness *= mr_sample.g;
         metallic  *= mr_sample.b;
@@ -61,30 +98,25 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     roughness = max(roughness, 0.04);
 
     // --- Normal mapping ---
-    var N = hit.normal; // smooth interpolated vertex normal
+    var N = smooth_N;
     if (mat.normal_tex_layer >= 0) {
-        // Build TBN matrix from interpolated normal and tangent
-        let T_raw = hit.tangent.xyz - N * dot(hit.tangent.xyz, N); // Gram-Schmidt re-orthogonalize
+        let T_raw = interp_tangent_dir - N * dot(interp_tangent_dir, N);
         let T_len = length(T_raw);
         var T = vec3f(0.0);
         if (T_len > 0.001) {
             T = T_raw / T_len;
         } else {
-            // Fallback: generate tangent from normal
             let refVec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(N.y) > 0.9);
             T = normalize(cross(N, refVec));
         }
-        let handedness = select(hit.tangent.w, 1.0, abs(hit.tangent.w) < 0.5);
-        let B = normalize(cross(N, T)) * handedness;
+        let h = select(handedness, 1.0, abs(handedness) < 0.5);
+        let B = normalize(cross(N, T)) * h;
         let tbn = mat3x3f(T, B, N);
 
-        let normal_sample = textureSampleLevel(normal_map_tex, normal_map_sampler, hit.uv, mat.normal_tex_layer, 0.0).rgb;
+        let normal_sample = textureSampleLevel(normal_map_tex, tex_sampler, hit_uv, mat.normal_tex_layer, 0.0).rgb;
         let tangent_normal = normal_sample * 2.0 - 1.0;
         N = normalize(tbn * tangent_normal);
     }
-
-    // Use geometric normal for ray offset to avoid self-intersection
-    let geom_N = hit.geom_normal;
 
     var rng = initRNG(pixel_id ^ (ray.bounce * 1009u), pt.frame_index);
 
@@ -124,7 +156,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             }
         }
         ray.throughput      *= albedo;
-        ray.origin           = hit.pos + new_dir * 0.001;
+        ray.origin           = hit_pos + new_dir * 0.001;
         ray.direction        = new_dir;
         ray.ior              = new_ior;
         ray.bounce          += 1u;
@@ -162,7 +194,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var is_specular: bool = false;
 
     if (use_specular) {
-        // GGX importance sampling
         let H      = sampleGGX(N, roughness, &rng);
         let L      = normalize(reflect(-V, H));
         let NdotL  = dot(N, L);
@@ -179,19 +210,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         let G      = geometrySchlickGGX_pt(NdotV, roughness)
                    * geometrySchlickGGX_pt(NdotL_, roughness);
 
-        // BRDF/PDF weight for GGX importance sampling of H:
-        // weight = F * G * VdotH / (NdotH * NdotV)
-        // Divide by spec_prob for unbiased MIS
         let spec_brdf_weight = Fspec * G * VdotH / max(NdotH * NdotV, 0.0001);
         new_dir       = L;
         new_throughput = ray.throughput * spec_brdf_weight * (rr_weight / spec_prob);
         is_specular   = (roughness < 0.05);
     } else {
-        // Cosine-weighted hemisphere sampling for diffuse
         let L       = sampleCosineHemisphere(N, &rng);
         let kD      = (vec3f(1.0) - fresnelSchlickV(NdotV, F0)) * (1.0 - metallic);
         new_dir       = L;
-        // Divide by (1-spec_prob) for unbiased MIS
         new_throughput = ray.throughput * albedo * kD * (rr_weight / (1.0 - spec_prob));
     }
 
@@ -204,8 +230,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // NEE — direct sun light
     if (sun_light.color.a > 0.5 && !is_specular) {
         let base_sun_dir = normalize(sun_light.direction.xyz);
-
-        // Soft shadow: jitter sun direction within a small cone
         let up_vec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(base_sun_dir.x) > 0.9);
         let sun_tangent = normalize(cross(base_sun_dir, up_vec));
         let sun_bitangent = cross(base_sun_dir, sun_tangent);
@@ -228,7 +252,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             let sun_rad = sun_light.color.rgb * sun_light.direction.w;
             let Lo_sun  = (diff_s + spec_s) * sun_rad * NdotL_s;
 
-            shadow.origin       = hit.pos + geom_N * 0.002;
+            shadow.origin       = hit_pos + smooth_N * 0.002;
             shadow.max_dist     = 1000.0;
             shadow.direction    = sun_dir;
             shadow.pixel_id     = pixel_id;
@@ -240,7 +264,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Spawn next bounce
     ray.throughput      = new_throughput;
-    ray.origin          = hit.pos + geom_N * 0.001;
+    ray.origin          = hit_pos + smooth_N * 0.001;
     ray.direction       = new_dir;
     ray.bounce         += 1u;
     ray.ray_active      = select(0u, 1u, ray.bounce < pt.max_bounces);
