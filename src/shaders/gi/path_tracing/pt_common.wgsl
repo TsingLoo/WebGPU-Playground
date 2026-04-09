@@ -84,7 +84,7 @@ struct PTUniforms {
     max_bounces:    u32,
     clamp_radiance: f32,
     pixel_scale:    f32,
-    _pad:           u32,
+    restir_enabled: u32,  // 1 = ReSTIR active (shade skips NEE for bounce 0)
 };
 
 // ============================================================
