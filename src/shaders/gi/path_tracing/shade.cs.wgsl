@@ -91,9 +91,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let mat = unpackPTMaterial(&materials, hit.mat_id);
 
     var albedo = mat.albedo;
+    var final_alpha = mat.alpha;
     if (mat.tex_layer >= 0) {
         let tex_col = textureSampleLevel(base_color_tex, tex_sampler, hit_uv, mat.tex_layer, 0.0);
         albedo *= tex_col.xyz;
+        final_alpha *= tex_col.w;
+    }
+
+    // Alpha test: if the surface is transparent (leaf cutouts, etc.), pass through
+    if (final_alpha < 0.5) {
+        // Advance the ray slightly past the hit point and continue tracing
+        ray.origin    = hit_pos + ray.direction * 0.001;
+        // Don't change direction, throughput, or bounce — the ray just passes through
+        ray_buffer[pixel_id] = ray;
+        return;
     }
 
     // --- Metallic-Roughness map sampling ---

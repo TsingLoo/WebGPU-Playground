@@ -150,7 +150,7 @@ export class Scene {
         this.globalMaterialBuffer = newGlobalMaterialBuffer;
 
         // --- Helper: Build/Merge a Texture Array ---
-        const TEX_ARRAY_SIZE = 256;
+        const TEX_ARRAY_SIZE = 1024;
         const totalLayers = this.layerCount + newLayerCount;
 
         const mergeTexArray = (label: string, oldArray: GPUTexture | null, oldLayers: number, newImages: GPUTexture[]): GPUTexture => {
