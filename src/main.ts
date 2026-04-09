@@ -280,6 +280,7 @@ lights.updateLightSetUniformNumLights();
 // =========== Stage ===========
 const stage = new Stage(scene, lights, camera, stats, environment);
 addHelpersToScene(scene, camera, stage);
+stage.nrc.setSceneBounds(scene.bvhData.boundingBoxMin, scene.bvhData.boundingBoxMax);
 
 var renderer: Renderer | undefined;
 
@@ -316,6 +317,10 @@ ptFolder.add(ptConfig, 'clampRadiance', 1.0, 50.0, 0.5).name('Clamp Radiance').o
 ptFolder.add(ptConfig, 'pixelScale', 0.25, 1.0, 0.25).name('Pixel Scale').onChange((v: number) => {
     const r = renderer as unknown as WavefrontPathTracingRenderer;
     if (r && 'config' in r) { r.config.pixelScale = v; }
+});
+ptFolder.add(stage.nrc, 'enabled').name('Enable NRC').onChange(() => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'resetAccumulation' in r) { r.resetAccumulation(); ptConfig.sampleCount = 0; }
 });
 const ptSampleCountController = ptFolder.add(ptConfig, 'sampleCount').name('Samples').listen();
 ptFolder.add({ reset: () => {
@@ -534,6 +539,7 @@ modelFileInput.addEventListener('change', async (event) => {
         addHelpersToScene(newScene, camera, stage);
         stage.scene = newScene;
         sceneTreeUI.setScene(newScene);
+        stage.nrc.setSceneBounds(newScene.bvhData.boundingBoxMin, newScene.bvhData.boundingBoxMax);
 
         // Disable random point lights (designed for Sponza) to avoid color artifacts
         lights.numLights = 0;
@@ -592,6 +598,7 @@ appendModelFileInput.addEventListener('change', async (event) => {
         
         scene.root.updateWorldTransform();
         sceneTreeUI.setScene(scene); // Refresh UI hierarchy
+        stage.nrc.setSceneBounds(scene.bvhData.boundingBoxMin, scene.bvhData.boundingBoxMax);
 
         // Re-init renderer to pick up the expanded global buffers and textures
         if (renderModeController) {

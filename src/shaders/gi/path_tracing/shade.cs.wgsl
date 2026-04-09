@@ -20,6 +20,12 @@
 @group(0) @binding(13) var<storage, read>        bvh_normals:        array<vec4f>;
 @group(0) @binding(14) var<storage, read>        bvh_tangents:       array<vec4f>;
 
+// NRC Group
+@group(1) @binding(0)  var<uniform>              nrc:                NRCUniforms;
+@group(1) @binding(1)  var<storage, read>        nrc_weights:        array<f32>;
+@group(1) @binding(2)  var<storage, read_write>  sampleCounter:      atomic<u32>;
+@group(1) @binding(3)  var<storage, read_write>  pt_nrc_train_data:  array<NRCWavefrontTrainData>;
+
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
@@ -40,6 +46,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Miss: leave ray state for the miss shader to handle
     if (hit.did_hit == 0u) {
+        if (ray.ray_active == 2u) {
+            // Training ray missed, we still need to clear it so it doesn't loop forever
+            ray.ray_active = 0u;
+        }
         ray_buffer[pixel_id] = ray;
         return;
     }
@@ -174,14 +184,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let F0 = mix(vec3f(0.04), albedo, metallic);
 
     // Russian Roulette (only after bounce 2)
+    // We let training rays (ray_active == 2u) run without RR to stabilize target radiance, or we can use RR.
+    // Following the paper, we leave RR enabled for unbiased targets, but we must ignore ray_active == 2u 
+    // termination if we want to ensure N=5. Let's just disable RR for training paths (ray_active == 2) for better variance.
     let rr_max = max(ray.throughput.x, max(ray.throughput.y, ray.throughput.z));
     let rr_survive = clamp(rr_max, 0.05, 1.0);
-    if (ray.bounce >= 2u && rand(&rng) > rr_survive) {
+    if (ray.bounce >= 2u && ray.ray_active != 2u && rand(&rng) > rr_survive) {
         ray.ray_active = 0u;
         ray_buffer[pixel_id] = ray;
         return;
     }
-    let rr_weight = select(1.0 / rr_survive, 1.0, ray.bounce < 2u);
+    let rr_weight = select(1.0 / rr_survive, 1.0, ray.bounce < 2u || ray.ray_active == 2u);
 
     // Stochastic lobe selection: specular vs diffuse
     let F_avg = fresnelSchlickV(NdotV, F0);
@@ -262,16 +275,101 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
     shadow_buffer[pixel_id] = shadow;
 
-    // Spawn next bounce
+    // Spawn next bounce (or evaluate NRC)
     ray.throughput      = new_throughput;
     ray.origin          = hit_pos + smooth_N * 0.001;
     ray.direction       = new_dir;
     ray.bounce         += 1u;
-    ray.ray_active      = select(0u, 1u, ray.bounce < pt.max_bounces);
+    
+    // Default active state
+    if (ray.ray_active != 2u) {
+        ray.ray_active = select(0u, 1u, ray.bounce < pt.max_bounces);
+    } else {
+        ray.ray_active = select(0u, 2u, ray.bounce < pt.max_bounces);
+    }
     ray.specular_bounce = select(0u, 1u, is_specular);
 
     if (max(ray.throughput.x, max(ray.throughput.y, ray.throughput.z)) < 0.001) {
         ray.ray_active = 0u;
     }
+    
+    let is_inference_enabled = nrc.scene_min.w > 0.5; // w holds enabled flag
+
+    // =================================================================
+    // NRC Inference & Training Logic (Always at 2nd Vertex: bounce == 1)
+    // =================================================================
+    if (ray.bounce == 1u && is_inference_enabled && ray.ray_active != 0u) {
+        // We are at the second vertex! Should we train or infer?
+        // Randomly select a subset to train (approx bounding to MAX_TRAINING_SAMPLES)
+        let total_pixels_f = f32(total_pixels);
+        let train_fraction = f32(nrc.params.y) / total_pixels_f; // nrc.params.y holds the requested max samples
+        
+        let is_training_ray = rand(&rng) < train_fraction;
+        
+        var became_training = false;
+        if (is_training_ray) {
+            let slot = atomicAdd(&sampleCounter, 1u);
+            if (slot < u32(nrc.params.y)) {
+                // We got a slot! Save training features
+                var train_data: NRCWavefrontTrainData;
+                let features = nrcEncodeInput(hit_pos, smooth_N, -ray.direction, nrc.scene_min.xyz, nrc.scene_max.xyz);
+                for (var i=0u; i<15u; i++) { train_data.features[i] = features[i]; }
+                
+                train_data.throughput = ray.throughput; // this is throughput AT the 2nd vertex
+                train_data.primary_radiance = accum_buffer[pixel_id].xyz; // captures direct light from bounce 0
+                train_data.pixel_id = pixel_id;
+                train_data.is_active = 1u;
+                pt_nrc_train_data[slot] = train_data;
+                
+                // Mark this ray to continue tracing up to pt.max_bounces
+                ray.ray_active = 2u;
+                became_training = true;
+            }
+        }
+        
+        if (!became_training) {
+            // Path terminates here! Query NRC for outgoing radiance from this vertex
+            let features = nrcEncodeInput(hit_pos, smooth_N, -ray.direction, nrc.scene_min.xyz, nrc.scene_max.xyz);
+            let pred = nrcForward(features, &nrc_weights);
+            
+            // Tone map recovery, clamp and guard
+            var clampedPred = clamp(pred, vec3f(0.0), vec3f(0.95));
+            if (clampedPred.x != clampedPred.x || clampedPred.y != clampedPred.y || clampedPred.z != clampedPred.z) {
+                clampedPred = vec3f(0.0);
+            }
+            let hdrPred = clampedPred / max(vec3f(1.0) - clampedPred, vec3f(0.001));
+            
+            // Add NRC contribution multiplied by the throughput up to this vertex
+            let incoming_radiance = ray.throughput * hdrPred;
+            
+            let prev = accum_buffer[pixel_id];
+            accum_buffer[pixel_id] = vec4f(prev.xyz + clamp(incoming_radiance, vec3f(0.0), vec3f(pt.clamp_radiance)), prev.w);
+            
+            // Terminate inference ray
+            ray.ray_active = 0u;
+        }
+    }
+    
+    // =================================================================
+    // Terminal Vertex for Training Rays
+    // =================================================================
+    if (ray.bounce == pt.max_bounces - 1u && ray.ray_active == 2u && is_inference_enabled) {
+        // Query NRC for the tail of the training ray
+        let features = nrcEncodeInput(hit_pos, smooth_N, -ray.direction, nrc.scene_min.xyz, nrc.scene_max.xyz);
+        let pred = nrcForward(features, &nrc_weights);
+        
+        var clampedPred = clamp(pred, vec3f(0.0), vec3f(0.95));
+        if (clampedPred.x != clampedPred.x || clampedPred.y != clampedPred.y || clampedPred.z != clampedPred.z) {
+            clampedPred = vec3f(0.0);
+        }
+        let hdrPred = clampedPred / max(vec3f(1.0) - clampedPred, vec3f(0.001));
+        
+        let incoming_radiance = ray.throughput * hdrPred;
+        let prev = accum_buffer[pixel_id];
+        accum_buffer[pixel_id] = vec4f(prev.xyz + clamp(incoming_radiance, vec3f(0.0), vec3f(pt.clamp_radiance)), prev.w);
+        
+        // Terminate naturally
+    }
+
     ray_buffer[pixel_id] = ray;
 }
