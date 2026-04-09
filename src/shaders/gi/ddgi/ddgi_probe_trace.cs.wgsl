@@ -8,14 +8,13 @@
 @group(0) @binding(4) var<storage, read> bvhPositions: array<vec4f>;
 @group(0) @binding(5) var<storage, read> bvhIndices: array<vec4u>;
 
-struct MaterialData {
-    baseColor: vec4f,
-    roughness: f32,
-    metallic: f32,
-    pad0: f32,
-    pad1: f32,
-}
-@group(0) @binding(6) var<storage, read> materials: array<MaterialData>;
+// Materials buffer: 4 × vec4f = 16 floats per material entry
+// Layout per material:
+//   r0 = [baseColor.rgba]
+//   r1 = [roughness, metallic, texLayer(i32 bits), transmission]
+//   r2 = [ior, emissive.rgb]
+//   r3 = [normalTexLayer(i32 bits), mrTexLayer(i32 bits), pad, pad]
+@group(0) @binding(6) var<storage, read> materials: array<vec4f>;
 
 @group(0) @binding(7) var ddgiIrrAtlas: texture_2d<f32>;
 @group(0) @binding(8) var ddgiVisAtlas: texture_2d<f32>;
@@ -89,7 +88,10 @@ fn main(
     if (hit.didHit) {
         hitDist = hit.dist;
         let matId = hit.indices.w;
-        let mat = materials[matId];
+        // Unpack material from raw vec4f buffer (4 vec4fs per material)
+        let matBase = u32(matId) * 4u;
+        let r0 = materials[matBase + 0u]; // baseColor.rgba
+        let r1 = materials[matBase + 1u]; // roughness, metallic, texLayer(bits), transmission
         
         let pos = probeWorldPos + rotatedDir * hitDist;
         // Convert to properly outward-facing geometric normal
@@ -107,10 +109,10 @@ fn main(
         let uv2 = bvhUVs[hit.indices.z].xy;
         let hitUV = uv0 * hit.barycoord.x + uv1 * hit.barycoord.y + uv2 * hit.barycoord.z;
         
-        var surfaceColor = mat.baseColor.rgb; 
+        var surfaceColor = r0.rgb; 
         
-        // Material pad0 stores the texture layer as f32 bits. bitcast to i32.
-        let texLayer = bitcast<i32>(mat.pad0);
+        // r1.z stores the texture layer as f32 bits. bitcast to i32.
+        let texLayer = bitcast<i32>(r1.z);
         if (texLayer >= 0) {
             let texColor = textureSampleLevel(baseColorTexArray, baseColorSampler, hitUV, texLayer, 0.0);
             
@@ -118,7 +120,7 @@ fn main(
             // but we created texture_2d_array as 'rgba8unorm' to match shader float bindings without hassle,
             // so we must decode the sRGB texture color to linear properly here:
             let linearTexColor = pow(texColor.rgb, vec3f(2.2));
-            surfaceColor = linearTexColor * mat.baseColor.rgb;
+            surfaceColor = linearTexColor * r0.rgb;
         }
         
         var hitLighting = vec3f(0.0);
