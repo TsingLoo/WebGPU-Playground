@@ -77,16 +77,25 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     sunComp.direction = stageObj.sunDirection;
     sunComp.color = stageObj.sunColor;
     applyComponentSchema(sunComp, 'DirectionalLightComponent', stageObj, globals);
+    // wire enabled to sunEnabled + trigger lighting sync
+    Object.defineProperty(sunComp, 'enabled', { 
+        get: () => stageObj.sunEnabled, 
+        set: (v) => { 
+            stageObj.sunEnabled = v; 
+            stageObj.updateSunLight();
+        }, 
+        enumerable: true 
+    });
     sunEntity.addComponent(sunComp);
 
     // VSM Shadow Component appended to Sun Entity
     const vsmComp = new VSMShadowComponent();
     applyComponentSchema(vsmComp, 'VSMShadowComponent', stageObj, globals);
-    // wire enabled to sunEnabled + trigger lighting sync
+    // wire enabled to vsmEnabled + trigger lighting sync
     Object.defineProperty(vsmComp, 'enabled', { 
-        get: () => stageObj.sunEnabled, 
+        get: () => stageObj.vsmEnabled, 
         set: (v) => { 
-            stageObj.sunEnabled = v; 
+            stageObj.vsmEnabled = v; 
             stageObj.updateSunLight();
         }, 
         enumerable: true 

@@ -35,6 +35,7 @@ export class Stage {
     sunVolumetricMaxDist: number = 82.0;
     sunVolumetricSteps: number = 16;
     sunEnabled: boolean = true;
+    vsmEnabled: boolean = true; // Controls shadow map generation & sampling
 
     showGIBounds: boolean = false;
 
@@ -82,11 +83,11 @@ export class Stage {
         data[7] = this.sunEnabled ? 1.0 : 0.0;
         // light_vp matrix (16 floats) — placeholder identity, VSM uses its own clipmap VPs
         data[8] = 1; data[13] = 1; data[18] = 1; data[23] = 1;
-        // shadow_params: x = texel size, y = bias, z = steps, w = 0
+        // shadow_params: x = texel size, y = bias, z = steps, w = vsmEnabled
         data[24] = 1.0 / this.vsm.physAtlasSize;
         data[25] = 0.05; // normal bias
         data[26] = this.sunVolumetricSteps;
-        data[27] = 0;
+        data[27] = this.vsmEnabled ? 1.0 : 0.0;
         // volumetric_params: x = intensity, y = heightFalloff, z = heightScale, w = maxDist
         data[28] = this.sunVolumetricIntensity;
         data[29] = this.sunVolumetricHeightFalloff;

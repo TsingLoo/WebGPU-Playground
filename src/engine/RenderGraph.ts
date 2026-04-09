@@ -259,9 +259,16 @@ export class RenderGraph implements PassResolver {
         return { activePasses, resourceLifetimes };
     }
 
+    private lastFramePasses: string = "";
+
     public execute(encoder: GPUCommandEncoder) {
         const { activePasses, resourceLifetimes } = this.compile();
-        console.log("Active Passes:", activePasses.map(p => p.name));
+
+        const passNamesStr = activePasses.map(p => p.name).join(",");
+        if (this.lastFramePasses !== passNamesStr) {
+            console.log(`Active Passes changed (${activePasses.length} total):`, activePasses.map(p => p.name));
+            this.lastFramePasses = passNamesStr;
+        }
 
         const activePhysicals = new Map<ResourceHandle, PhysicalTexture>();
 
