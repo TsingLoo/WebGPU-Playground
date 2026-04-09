@@ -7,6 +7,7 @@ import { initWebGPU, Renderer, device } from './renderer';
 
 import { ForwardPlusRenderer } from './renderers/forward_plus';
 import { ClusteredDeferredRenderer } from './renderers/clustered_deferred';
+import { WavefrontPathTracingRenderer } from './renderers/path_tracing_wavefront';
 
 // @ts-ignore
 import parseHdr from 'parse-hdr';
@@ -37,7 +38,7 @@ setupLoaders();
 let scene = new Scene();
 const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
 scene.root.addChild(gltfResult.rootEntity);
-await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.baseColorImages.length);
+await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.normalMapImages, gltfResult.mrImages, gltfResult.baseColorImages.length);
 scene.bvhData = buildBVHFromScene(scene.root);
 
 const voxelResult = buildVoxelGrid(scene.root);
@@ -61,7 +62,8 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     // but the Schema will look them up dynamically when onUpdate is called.
     const globals = {
         get setRenderer() { return typeof setRenderer !== 'undefined' ? setRenderer : undefined; },
-        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; }
+        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; },
+        get activeRenderer() { return typeof renderer !== 'undefined' ? renderer : undefined; }
     };
 
     const cameraEntity = new Entity("Main Camera");
@@ -254,7 +256,11 @@ const avgStats = {
 const gui = new GUI();
 
 // =========== Render Mode (top-level) ===========
-const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
+const renderModes = {
+    forwardPlus: 'forward+',
+    clusteredDeferred: 'clustered deferred',
+    pathTracing: 'path tracing'
+};
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
 gui.add(avgStats, 'currentFPS').name('Current FPS').listen();
@@ -287,8 +293,49 @@ function setRenderer(mode: string) {
         case renderModes.clusteredDeferred:
             renderer = new ClusteredDeferredRenderer(stage);
             break;
+        case renderModes.pathTracing:
+            renderer = new WavefrontPathTracingRenderer(stage);
+            // Wire up GUI controls to the WPT renderer
+            ptSampleCountController?.listen();
+            break;
     }
 }
+
+// =========== Path Tracing GUI ===========
+const ptFolder = gui.addFolder('Path Tracing');
+const ptConfig = { maxBounces: 4, clampRadiance: 10.0, pixelScale: 1.0, sampleCount: 0, reset: () => {} };
+
+ptFolder.add(ptConfig, 'maxBounces', 1, 8, 1).name('Max Bounces').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.maxBounces = v; r.resetAccumulation(); }
+});
+ptFolder.add(ptConfig, 'clampRadiance', 1.0, 50.0, 0.5).name('Clamp Radiance').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.clampRadiance = v; }
+});
+ptFolder.add(ptConfig, 'pixelScale', 0.25, 1.0, 0.25).name('Pixel Scale').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.pixelScale = v; }
+});
+const ptSampleCountController = ptFolder.add(ptConfig, 'sampleCount').name('Samples').listen();
+ptFolder.add({ reset: () => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'resetAccumulation' in r) {
+        r.resetAccumulation();
+        ptConfig.sampleCount = 0;
+    }
+}}, 'reset').name('Reset Accumulation');
+
+// Sync sampleCount display each animation frame
+function syncPTStats() {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'sampleCount' in r) {
+        ptConfig.sampleCount = r.sampleCount;
+    }
+    requestAnimationFrame(syncPTStats);
+}
+syncPTStats();
+
 
 renderModeController.onChange(setRenderer);
 
@@ -476,7 +523,7 @@ modelFileInput.addEventListener('change', async (event) => {
         const result = await loadGltfBuffer(buffer, 0, 0); // brand new scene starts from offset 0
         newScene.root.addChild(result.rootEntity);
         
-        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
         newScene.bvhData = buildBVHFromScene(newScene.root);
         
         const voxelResult = buildVoxelGrid(newScene.root);
@@ -536,7 +583,7 @@ appendModelFileInput.addEventListener('change', async (event) => {
         const result = await loadGltfBuffer(buffer, scene.materialCount, scene.layerCount);
         scene.root.addChild(result.rootEntity);
         
-        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
         scene.bvhData = buildBVHFromScene(scene.root);
         
         const voxelResult = buildVoxelGrid(scene.root);

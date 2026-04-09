@@ -3,6 +3,9 @@ import { Scene } from './Scene';
 import { loadGltf } from './GLTFLoader';
 import { DirectionalLightComponent, PointLightComponent } from './components/LightComponent';
 import { mat4 } from 'wgpu-matrix';
+import { device } from '../renderer';
+import { buildBVHFromScene } from '../stage/bvh_builder';
+import { buildVoxelGrid } from './GLTFLoader';
 
 export interface SceneConfig {
     name: string;
@@ -67,13 +70,11 @@ export class SceneLoader {
                     // This is a temporary monolithic mapping. In a full engine, GLTF chunks are components.
                     const result = await loadGltf(compConfig.path);
                     entity.addChild(result.rootEntity);
-                    // Attach global data to scene (hack for now until engine handles multiple models)
-                    scene.bvhData = result.bvhData;
-                    scene.voxelGrid = result.voxelGrid;
-                    scene.voxelGridView = result.voxelGridView;
-                    scene.globalMaterialBuffer = result.globalMaterialBuffer;
-                    scene.baseColorTexArray = result.baseColorTexArray;
-                    scene.baseColorTexArrayView = result.baseColorTexArrayView;
+                    await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
+                    scene.bvhData = buildBVHFromScene(scene.root);
+                    const voxelResult = buildVoxelGrid(scene.root);
+                    scene.voxelGrid = voxelResult.voxelGrid;
+                    scene.voxelGridView = voxelResult.voxelGridView;
                 } else if (compConfig.type === 'DirectionalLightComponent') {
                     const light = entity.addComponent(new DirectionalLightComponent());
                     if (compConfig.direction) light.direction = compConfig.direction;
