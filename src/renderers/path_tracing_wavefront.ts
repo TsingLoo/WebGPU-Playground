@@ -389,26 +389,26 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.dispatchWorkgroups(r1D, 1, 1);
                 pass.end();
             }
-        }
 
-        // ---- Pass: Miss (env for remaining active rays) ----
-        {
-            const bg = dev.createBindGroup({
-                layout: this.missLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                    { binding: 1, resource: { buffer: this.rayBuffer } },
-                    { binding: 2, resource: { buffer: this.hitBuffer } },
-                    { binding: 3, resource: { buffer: this.accumWorkBuffer } },
-                    { binding: 4, resource: this.stage.environment.envCubemapView },
-                    { binding: 5, resource: this.stage.environment.envSampler },
-                ]
-            });
-            const pass = encoder.beginComputePass({ label: 'WPT Miss' });
-            pass.setPipeline(this.missPipeline);
-            pass.setBindGroup(0, bg);
-            pass.dispatchWorkgroups(r1D, 1, 1);
-            pass.end();
+            // Pass 4: Miss (env sampling for rays that escaped this bounce)
+            {
+                const bg = dev.createBindGroup({
+                    layout: this.missLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.ptUniformBuffer } },
+                        { binding: 1, resource: { buffer: this.rayBuffer } },
+                        { binding: 2, resource: { buffer: this.hitBuffer } },
+                        { binding: 3, resource: { buffer: this.accumWorkBuffer } },
+                        { binding: 4, resource: this.stage.environment.envCubemapView },
+                        { binding: 5, resource: this.stage.environment.envSampler },
+                    ]
+                });
+                const pass = encoder.beginComputePass({ label: `WPT Miss b${bounce}` });
+                pass.setPipeline(this.missPipeline);
+                pass.setBindGroup(0, bg);
+                pass.dispatchWorkgroups(r1D, 1, 1);
+                pass.end();
+            }
         }
 
         // ---- Pass: Accumulate (add frame to persistent sum) ----

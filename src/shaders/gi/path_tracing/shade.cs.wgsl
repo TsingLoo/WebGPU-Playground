@@ -147,7 +147,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // NEE — direct sun light
     if (sun_light.color.a > 0.5 && !is_specular) {
-        let sun_dir  = normalize(sun_light.direction.xyz);
+        let base_sun_dir = normalize(sun_light.direction.xyz);
+        
+        let up_vec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(base_sun_dir.x) > 0.9);
+        let sun_tangent = normalize(cross(base_sun_dir, up_vec));
+        let sun_bitangent = cross(base_sun_dir, sun_tangent);
+        let r2 = rand2(&rng);
+        let r = sqrt(r2.x) * 0.05; // 0.05 is sun angular radius
+        let theta = 2.0 * PI * r2.y;
+        let sun_dir = normalize(base_sun_dir + sun_tangent * r * cos(theta) + sun_bitangent * r * sin(theta));
+
         let NdotL_s  = max(dot(N, sun_dir), 0.0);
         if (NdotL_s > 0.0) {
             let H_s    = normalize(V + sun_dir);
@@ -174,7 +183,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Spawn next bounce
     ray.throughput      = new_throughput;
-    ray.origin          = hit.pos + new_dir * 0.001;
+    ray.origin          = hit.pos + N * 0.001;
     ray.direction       = new_dir;
     ray.bounce         += 1u;
     ray.ray_active      = select(0u, 1u, ray.bounce < pt.max_bounces);
