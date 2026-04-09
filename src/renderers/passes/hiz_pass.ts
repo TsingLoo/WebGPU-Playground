@@ -44,10 +44,9 @@ export class HiZPass {
     }
 
     resize(width: number, height: number) {
-        if (this.hizTexture) {
-            this.hizTexture.destroy();
-        }
+        // Let garbage collection handle old textures natively
         
+
         this.hizSize = [width, height];
         this.mipLevelCount = Math.floor(Math.log2(Math.max(width, height))) + 1;
 

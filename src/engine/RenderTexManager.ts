@@ -42,8 +42,7 @@ export class RenderTexManager {
             if (existingTex.width === w && existingTex.height === h && existingTex.format === desc.format && existingTex.usage === desc.usage) {
                 return this.views.get(name)!;
             }
-            // Configuration changed, destroy old texture
-            existingTex.destroy();
+            // Configuration changed, let garbage collection handle old texture natively
             this.textures.delete(name);
             this.views.delete(name);
         }
@@ -73,9 +72,6 @@ export class RenderTexManager {
     }
 
     public static clearAll() {
-        for (const tex of this.textures.values()) {
-            tex.destroy();
-        }
         this.textures.clear();
         this.views.clear();
         this.formats.clear();

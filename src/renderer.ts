@@ -206,22 +206,11 @@ export abstract class Renderer {
     }
 
     private onResizeBound = () => {
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = canvas.clientWidth * dpr;
-        canvas.height = canvas.clientHeight * dpr;
-        aspectRatio = canvas.width / canvas.height;
+        aspectRatio = canvas.clientWidth / canvas.clientHeight;
         this.camera.onResize(aspectRatio);
-        
-        // Clear all renderer-managed textures so they get recreated on next fetch
-        RenderTexManager.clearAll();
-        BindGroupCache.clearAll();
-        
-        // Option to add per-renderer custom logic
-        this.onResize();
     };
 
-    // Virtual hook for subclasses handling resize specific logic
-    protected onResize() {}
+
 
     stop(): void {
         cancelAnimationFrame(this.frameRequestId);

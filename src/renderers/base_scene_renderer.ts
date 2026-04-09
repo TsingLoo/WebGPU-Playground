@@ -197,7 +197,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         this.ddgiDebugPass = new DDGIDebugPass();
     }
-
     // ==== Template Method Architecture ====
 
     override draw() {
