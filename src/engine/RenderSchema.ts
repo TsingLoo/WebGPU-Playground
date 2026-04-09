@@ -18,8 +18,17 @@ export const renderSchema: Record<string, ComponentConfig> = {
     'DirectionalLightComponent': {
         targetSystem: '',
         bindings: [
-            { compKey: 'intensity', stageKey: 'sunIntensity' }
-        ]
+            { compKey: 'intensity', stageKey: 'sunIntensity' },
+            { compKey: 'direction', stageKey: 'sunDirection', transformSet: (v: any) => Array.from(v) },
+            { compKey: 'color', stageKey: 'sunColor', transformSet: (v: any) => Array.from(v) }
+        ],
+        onUpdate: (stageObj: any, globals: any) => {
+            stageObj.updateSunLight();
+            // Reset path tracer accumulation when light changes
+            if (globals.activeRenderer && 'resetAccumulation' in globals.activeRenderer) {
+                globals.activeRenderer.resetAccumulation();
+            }
+        }
     },
     'PointLightSettingsComponent': {
         targetSystem: 'lights',
