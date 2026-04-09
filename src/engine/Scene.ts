@@ -16,6 +16,10 @@ export class Scene {
     public globalMaterialBuffer!: GPUBuffer;
     public baseColorTexArray!: GPUTexture;
     public baseColorTexArrayView!: GPUTextureView;
+    public normalMapTexArray!: GPUTexture;
+    public normalMapTexArrayView!: GPUTextureView;
+    public mrTexArray!: GPUTexture;
+    public mrTexArrayView!: GPUTextureView;
 
     // CPU Data required for appending
     public materialDataArray: Float32Array = new Float32Array(0);
@@ -119,13 +123,16 @@ export class Scene {
         device: GPUDevice,
         newMaterialData: Float32Array,
         newCount: number,
-        newImages: GPUTexture[], // The temporarily uploaded individual resized images 
+        newBaseColorImages: GPUTexture[],
+        newNormalMapImages: GPUTexture[],
+        newMRImages: GPUTexture[],
         newLayerCount: number
     ) {
+        const FLOATS_PER_MAT = 16;
         // --- Merge Global Material Buffer ---
-        const combinedMaterials = new Float32Array(this.materialCount * 8 + newCount * 8);
+        const combinedMaterials = new Float32Array(this.materialCount * FLOATS_PER_MAT + newCount * FLOATS_PER_MAT);
         combinedMaterials.set(this.materialDataArray);
-        combinedMaterials.set(newMaterialData, this.materialCount * 8);
+        combinedMaterials.set(newMaterialData, this.materialCount * FLOATS_PER_MAT);
 
         this.materialDataArray = combinedMaterials;
         this.materialCount += newCount;
@@ -142,46 +149,48 @@ export class Scene {
         }
         this.globalMaterialBuffer = newGlobalMaterialBuffer;
 
-        // --- Merge BaseColor Texture Array ---
+        // --- Helper: Build/Merge a Texture Array ---
         const TEX_ARRAY_SIZE = 256;
         const totalLayers = this.layerCount + newLayerCount;
 
-        const newBaseColorTexArray = device.createTexture({
-            label: "BaseColor Texture Array (Merged)",
-            size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
-            format: 'rgba8unorm',
-            dimension: '2d',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-        });
+        const mergeTexArray = (label: string, oldArray: GPUTexture | null, oldLayers: number, newImages: GPUTexture[]): GPUTexture => {
+            const tex = device.createTexture({
+                label, size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
+                format: 'rgba8unorm', dimension: '2d',
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+            const enc = device.createCommandEncoder();
+            if (oldArray && oldLayers > 0) {
+                enc.copyTextureToTexture(
+                    { texture: oldArray, aspect: 'all' },
+                    { texture: tex, aspect: 'all' },
+                    [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, oldLayers]
+                );
+            }
+            for (let i = 0; i < newImages.length; i++) {
+                enc.copyTextureToTexture(
+                    { texture: newImages[i], aspect: 'all' },
+                    { texture: tex, origin: [0, 0, oldLayers + i] },
+                    [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1]
+                );
+            }
+            device.queue.submit([enc.finish()]);
+            if (oldArray) oldArray.destroy();
+            return tex;
+        };
 
-        const commandEncoder = device.createCommandEncoder();
+        // --- Merge BaseColor Texture Array ---
+        this.baseColorTexArray = mergeTexArray("BaseColor Array", this.baseColorTexArray, this.layerCount, newBaseColorImages);
+        this.baseColorTexArrayView = this.baseColorTexArray.createView({ dimension: '2d-array' });
 
-        // 1. Copy old layers if they exist
-        if (this.baseColorTexArray && this.layerCount > 0) {
-            commandEncoder.copyTextureToTexture(
-                { texture: this.baseColorTexArray, aspect: 'all' },
-                { texture: newBaseColorTexArray, aspect: 'all' },
-                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, this.layerCount]
-            );
-        }
+        // --- Merge Normal Map Texture Array ---
+        this.normalMapTexArray = mergeTexArray("NormalMap Array", this.normalMapTexArray, this.layerCount, newNormalMapImages);
+        this.normalMapTexArrayView = this.normalMapTexArray.createView({ dimension: '2d-array' });
 
-        // 2. Copy new images 
-        for (let i = 0; i < newImages.length; i++) {
-            commandEncoder.copyTextureToTexture(
-                { texture: newImages[i], aspect: 'all' },
-                { texture: newBaseColorTexArray, origin: [0, 0, this.layerCount + i] },
-                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1]
-            );
-        }
+        // --- Merge MR Texture Array ---
+        this.mrTexArray = mergeTexArray("MR Array", this.mrTexArray, this.layerCount, newMRImages);
+        this.mrTexArrayView = this.mrTexArray.createView({ dimension: '2d-array' });
 
-        device.queue.submit([commandEncoder.finish()]);
-
-        if (this.baseColorTexArray) {
-            this.baseColorTexArray.destroy();
-        }
-
-        this.baseColorTexArray = newBaseColorTexArray;
-        this.baseColorTexArrayView = newBaseColorTexArray.createView({ dimension: '2d-array' });
         this.layerCount = totalLayers;
     }
 }

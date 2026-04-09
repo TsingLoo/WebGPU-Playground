@@ -501,7 +501,7 @@ export class Scene {
         }
 
         let sceneMaterials: Material[] = [];
-        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 8); // 8 floats per material (32 bytes)
+        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 16); // 16 floats per material (64 bytes)
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
         let defaultMetallic = 0.0;
@@ -516,19 +516,48 @@ export class Scene {
                 }
                 sceneMaterials.push(currentMat);
                 
-                // Pack for global materials buffer
+                // Pack for global materials buffer (16 floats)
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
 
-                materialDataArray[i * 8 + 0] = baseColorFactor[0] ?? 1.0;
-                materialDataArray[i * 8 + 1] = baseColorFactor[1] ?? 1.0;
-                materialDataArray[i * 8 + 2] = baseColorFactor[2] ?? 1.0;
-                materialDataArray[i * 8 + 3] = baseColorFactor[3] ?? 1.0;
-                materialDataArray[i * 8 + 4] = roughness;
-                materialDataArray[i * 8 + 5] = metallic;
-                materialDataArray[i * 8 + 6] = 0.0; // pad
-                materialDataArray[i * 8 + 7] = 0.0; // pad
+                // Extra properties
+                let transmissionExt = (gltfMaterial as any).extensions?.KHR_materials_transmission;
+                let transmission = transmissionExt?.transmissionFactor ?? 0.0;
+
+                let iorExt = (gltfMaterial as any).extensions?.KHR_materials_ior;
+                let ior = iorExt?.ior ?? 1.5;
+
+                let emissiveFactor = (gltfMaterial as any).emissiveFactor ?? [0.0, 0.0, 0.0];
+                let emissiveExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
+                let emissiveStrength = emissiveExt?.emissiveStrength ?? 1.0;
+
+                let texLayer = -1; // No texture layer lookup in the old scene path
+                const base = i * 16;
+
+                // r0: albedo.rgb, alpha
+                materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
+                materialDataArray[base + 1] = baseColorFactor[1] ?? 1.0;
+                materialDataArray[base + 2] = baseColorFactor[2] ?? 1.0;
+                materialDataArray[base + 3] = baseColorFactor[3] ?? 1.0;
+
+                // r1: roughness, metallic, tex_layer, transmission
+                materialDataArray[base + 4] = roughness;
+                materialDataArray[base + 5] = metallic;
+                new Int32Array(materialDataArray.buffer, (base + 6) * 4, 1)[0] = texLayer;
+                materialDataArray[base + 7] = transmission;
+
+                // r2: ior, emissive.rgb
+                materialDataArray[base + 8] = ior;
+                materialDataArray[base + 9] = emissiveFactor[0] * emissiveStrength;
+                materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
+                materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
+
+                // r3: normal_tex_layer, mr_tex_layer, pad, pad
+                new Int32Array(materialDataArray.buffer, (base + 12) * 4, 1)[0] = -1;
+                new Int32Array(materialDataArray.buffer, (base + 13) * 4, 1)[0] = -1;
+                materialDataArray[base + 14] = 0.0;
+                materialDataArray[base + 15] = 0.0;
             }
         }
 
