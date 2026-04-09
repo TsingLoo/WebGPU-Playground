@@ -290,6 +290,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
         const dev   = renderer.device;
         const scene = this.stage.scene;
 
+        // Flush sun light changes to GPU buffer
+        this.stage.updateSunLight();
+
         if (this.checkCameraChanged()) {
             this.resetAccumulation();
         }

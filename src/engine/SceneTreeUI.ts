@@ -368,11 +368,11 @@ export class SceneTreeUI {
                     const colorProxy = {
                         color: {
                             get r() { return (comp as any)[prop.key][0]; },
-                            set r(v) { (comp as any)[prop.key][0] = v; },
+                            set r(v) { const arr = (comp as any)[prop.key]; arr[0] = v; (comp as any)[prop.key] = arr; },
                             get g() { return (comp as any)[prop.key][1]; },
-                            set g(v) { (comp as any)[prop.key][1] = v; },
+                            set g(v) { const arr = (comp as any)[prop.key]; arr[1] = v; (comp as any)[prop.key] = arr; },
                             get b() { return (comp as any)[prop.key][2]; },
-                            set b(v) { (comp as any)[prop.key][2] = v; }
+                            set b(v) { const arr = (comp as any)[prop.key]; arr[2] = v; (comp as any)[prop.key] = arr; }
                         }
                     };
                     addUndoableBinding(compFolder, colorProxy, 'color', { color: { type: 'float' }, label: prop.key });
@@ -380,11 +380,11 @@ export class SceneTreeUI {
                     const vecProxy = {
                         vector: {
                             get x() { return (comp as any)[prop.key][0]; },
-                            set x(v) { (comp as any)[prop.key][0] = v; },
+                            set x(v) { const arr = (comp as any)[prop.key]; arr[0] = v; (comp as any)[prop.key] = arr; },
                             get y() { return (comp as any)[prop.key][1]; },
-                            set y(v) { (comp as any)[prop.key][1] = v; },
+                            set y(v) { const arr = (comp as any)[prop.key]; arr[1] = v; (comp as any)[prop.key] = arr; },
                             get z() { return (comp as any)[prop.key][2]; },
-                            set z(v) { (comp as any)[prop.key][2] = v; }
+                            set z(v) { const arr = (comp as any)[prop.key]; arr[2] = v; (comp as any)[prop.key] = arr; }
                         }
                     };
                     addUndoableBinding(compFolder, vecProxy, 'vector', { label: prop.key, ...prop.options });

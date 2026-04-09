@@ -62,7 +62,8 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     // but the Schema will look them up dynamically when onUpdate is called.
     const globals = {
         get setRenderer() { return typeof setRenderer !== 'undefined' ? setRenderer : undefined; },
-        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; }
+        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; },
+        get activeRenderer() { return typeof renderer !== 'undefined' ? renderer : undefined; }
     };
 
     const cameraEntity = new Entity("Main Camera");
