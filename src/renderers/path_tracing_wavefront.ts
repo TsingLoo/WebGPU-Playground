@@ -379,8 +379,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // prev_camera
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // reservoir_buffer (r/w)
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // prev_reservoir
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_pos
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // prev_pixel_data
             ]
@@ -394,8 +394,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // reservoir_in
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // reservoir_out
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_pos
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // pixel_data
             ]
@@ -408,15 +408,15 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // pt
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // camera
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // reservoir_buffer
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // shadow_buffer
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // accum_buffer
-                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // materials
-                { binding: 9, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color_tex
-                { binding: 10, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
-                { binding: 11, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // mr_tex
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // reservoir_buffer
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // shadow_buffer
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // accum_buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // materials
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color_tex
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // mr_tex
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_pos
                 { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
                 { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_normals
                 { binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_tangents
@@ -716,8 +716,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 3, resource: { buffer: this.prevCameraBuffer } },
                             { binding: 4, resource: { buffer: this.reservoirBufferA } },
                             { binding: 5, resource: { buffer: this.prevReservoirBuffer } },
-                            { binding: 6, resource: { buffer: this.rayBuffer } },
-                            { binding: 7, resource: { buffer: this.hitBuffer } },
+                            { binding: 6, resource: { buffer: this.hitBuffer } },
+                            { binding: 7, resource: { buffer: bvhData.positionBuffer } },
                             { binding: 8, resource: { buffer: bvhData.normalBuffer } },
                             { binding: 9, resource: { buffer: this.prevPixelDataBuffer } },
                         ]
@@ -738,8 +738,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 1, resource: { buffer: this.restirUniformBuffer } },
                             { binding: 2, resource: { buffer: this.reservoirBufferA } },   // in
                             { binding: 3, resource: { buffer: this.reservoirBufferB } },   // out
-                            { binding: 4, resource: { buffer: this.rayBuffer } },
-                            { binding: 5, resource: { buffer: this.hitBuffer } },
+                            { binding: 4, resource: { buffer: this.hitBuffer } },
+                            { binding: 5, resource: { buffer: bvhData.positionBuffer } },
                             { binding: 6, resource: { buffer: bvhData.normalBuffer } },
                             { binding: 7, resource: { buffer: this.pixelDataBuffer } },
                         ]
@@ -759,15 +759,15 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 0, resource: { buffer: this.ptUniformBuffer } },
                             { binding: 1, resource: { buffer: this.restirUniformBuffer } },
                             { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
-                            { binding: 3, resource: { buffer: this.rayBuffer } },
-                            { binding: 4, resource: { buffer: this.hitBuffer } },
-                            { binding: 5, resource: { buffer: this.reservoirBufferB } },
-                            { binding: 6, resource: { buffer: this.shadowBuffer } },
-                            { binding: 7, resource: { buffer: this.accumWorkBuffer } },
-                            { binding: 8, resource: { buffer: scene.globalMaterialBuffer } },
-                            { binding: 9, resource: scene.baseColorTexArrayView },
-                            { binding: 10, resource: baseColorSampler },
-                            { binding: 11, resource: scene.mrTexArrayView },
+                            { binding: 3, resource: { buffer: this.hitBuffer } },
+                            { binding: 4, resource: { buffer: this.reservoirBufferB } },
+                            { binding: 5, resource: { buffer: this.shadowBuffer } },
+                            { binding: 6, resource: { buffer: this.accumWorkBuffer } },
+                            { binding: 7, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 8, resource: scene.baseColorTexArrayView },
+                            { binding: 9, resource: baseColorSampler },
+                            { binding: 10, resource: scene.mrTexArrayView },
+                            { binding: 11, resource: { buffer: bvhData.positionBuffer } },
                             { binding: 12, resource: { buffer: bvhData.uvBuffer } },
                             { binding: 13, resource: { buffer: bvhData.normalBuffer } },
                             { binding: 14, resource: { buffer: bvhData.tangentBuffer } },

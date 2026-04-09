@@ -4,19 +4,21 @@
 // multiplied by the reservoir weight W. Generates a shadow ray for visibility testing.
 //
 // This replaces the NEE section of shade.cs.wgsl when ReSTIR is enabled.
+// Does NOT rely on ray_buffer for position/direction (shade has modified it).
+// Reconstructs everything from BVH + camera.
 
 @group(0) @binding(0)  var<uniform>              pt:                 PTUniforms;
 @group(0) @binding(1)  var<uniform>              restir:             ReSTIRUniforms;
 @group(0) @binding(2)  var<uniform>              camera:             CameraUniforms;
-@group(0) @binding(3)  var<storage, read>         ray_buffer:         array<PTRay>;
-@group(0) @binding(4)  var<storage, read>         hit_buffer:         array<HitRecord>;
-@group(0) @binding(5)  var<storage, read>         reservoir_buffer:   array<Reservoir>;
-@group(0) @binding(6)  var<storage, read_write>   shadow_buffer:      array<ShadowRay>;
-@group(0) @binding(7)  var<storage, read_write>   accum_buffer:       array<vec4f>;
-@group(0) @binding(8)  var<storage, read>         materials:          array<vec4f>;
-@group(0) @binding(9)  var                        base_color_tex:     texture_2d_array<f32>;
-@group(0) @binding(10) var                        tex_sampler:        sampler;
-@group(0) @binding(11) var                        mr_tex:             texture_2d_array<f32>;
+@group(0) @binding(3)  var<storage, read>         hit_buffer:         array<HitRecord>;
+@group(0) @binding(4)  var<storage, read>         reservoir_buffer:   array<Reservoir>;
+@group(0) @binding(5)  var<storage, read_write>   shadow_buffer:      array<ShadowRay>;
+@group(0) @binding(6)  var<storage, read_write>   accum_buffer:       array<vec4f>;
+@group(0) @binding(7)  var<storage, read>         materials:          array<vec4f>;
+@group(0) @binding(8)  var                        base_color_tex:     texture_2d_array<f32>;
+@group(0) @binding(9)  var                        tex_sampler:        sampler;
+@group(0) @binding(10) var                        mr_tex:             texture_2d_array<f32>;
+@group(0) @binding(11) var<storage, read>         bvh_pos:            array<vec4f>;
 @group(0) @binding(12) var<storage, read>         bvh_uvs:            array<vec4f>;
 @group(0) @binding(13) var<storage, read>         bvh_normals:        array<vec4f>;
 @group(0) @binding(14) var<storage, read>         bvh_tangents:       array<vec4f>;
@@ -26,9 +28,7 @@
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
-    let total_pixels  = render_width * render_height;
+    let total_pixels  = pt.width * pt.height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;
 
@@ -36,21 +36,23 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var shadow: ShadowRay;
     shadow.shadow_active = 0u;
 
-    let ray = ray_buffer[pixel_id];
     let hit = hit_buffer[pixel_id];
 
-    if (ray.ray_active == 0u || hit.did_hit == 0u) {
+    if (hit.did_hit == 0u) {
         shadow_buffer[pixel_id] = shadow;
-        // Write zero pixel data
         pixel_data_out[pixel_id] = vec4f(0.0, 0.0, 0.0, 0.0);
         return;
     }
 
     // ============================================================
-    // Reconstruct hit attributes (same as shade.cs.wgsl)
+    // Reconstruct hit attributes from BVH (NOT ray_buffer)
     // ============================================================
     let bw = vec3f(hit.bary.x, hit.bary.y, 1.0 - hit.bary.x - hit.bary.y);
-    let hit_pos = ray.origin + ray.direction * hit.dist;
+
+    let p0 = bvh_pos[hit.idx0].xyz;
+    let p1 = bvh_pos[hit.idx1].xyz;
+    let p2 = bvh_pos[hit.idx2].xyz;
+    let hit_pos = bw.x * p0 + bw.y * p1 + bw.z * p2;
 
     // UV interpolation
     let uv0 = bvh_uvs[hit.idx0].xy;
@@ -63,7 +65,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let sn1 = bvh_normals[hit.idx1].xyz;
     let sn2 = bvh_normals[hit.idx2].xyz;
     var smooth_N = normalize(bw.x * sn0 + bw.y * sn1 + bw.z * sn2);
-    if (dot(smooth_N, ray.direction) > 0.0) {
+    if (hit.side < 0.0) {
         smooth_N = -smooth_N;
     }
 
@@ -127,7 +129,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
 
-    let V = -ray.direction;
+    // View direction from camera position (NOT from ray_buffer!)
+    let V = normalize(camera.camera_pos.xyz - hit_pos);
     let NdotV = max(dot(N, V), 0.0001);
 
     let a  = roughness * roughness;
@@ -166,7 +169,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let brdf_eval = diff_brdf + spec_brdf;
 
     // ReSTIR contribution = BRDF * Le * W * NdotL
-    // The reservoir.W already handles the importance sampling weight
+    // At bounce 0, throughput is (1,1,1) so we don't need ray.throughput
     let Lo_restir = brdf_eval * reservoir.sample_Le * reservoir.W * NdotL;
 
     // Generate shadow ray
@@ -174,7 +177,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     shadow.max_dist     = light_dist - 0.01;
     shadow.direction    = L;
     shadow.pixel_id     = pixel_id;
-    shadow.Li           = clamp(ray.throughput * Lo_restir, vec3f(0.0), vec3f(pt.clamp_radiance));
+    shadow.Li           = clamp(Lo_restir, vec3f(0.0), vec3f(pt.clamp_radiance));
     shadow.shadow_active = 1u;
 
     shadow_buffer[pixel_id] = shadow;
