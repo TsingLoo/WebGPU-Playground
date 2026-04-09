@@ -3,6 +3,8 @@
 // Combines current-frame reservoir with previous-frame reservoir for the
 // same surface point (found via reprojection).
 // Clamps temporal M to prevent unbounded reservoir staleness.
+//
+// Does NOT rely on ray_buffer for position/direction (shade has modified it).
 
 @group(0) @binding(0)  var<uniform>              pt:                 PTUniforms;
 @group(0) @binding(1)  var<uniform>              restir:             ReSTIRUniforms;
@@ -10,18 +12,16 @@
 @group(0) @binding(3)  var<uniform>              prev_camera:        CameraUniforms;
 @group(0) @binding(4)  var<storage, read_write>   reservoir_buffer:   array<Reservoir>;
 @group(0) @binding(5)  var<storage, read>         prev_reservoir:     array<Reservoir>;
-@group(0) @binding(6)  var<storage, read>         ray_buffer:         array<PTRay>;
-@group(0) @binding(7)  var<storage, read>         hit_buffer:         array<HitRecord>;
+@group(0) @binding(6)  var<storage, read>         hit_buffer:         array<HitRecord>;
+@group(0) @binding(7)  var<storage, read>         bvh_pos:            array<vec4f>;
 @group(0) @binding(8)  var<storage, read>         bvh_normals:        array<vec4f>;
 // Previous frame's per-pixel data stored in storage buffers
 @group(0) @binding(9)  var<storage, read>         prev_pixel_data:    array<vec4f>;
-// prev_pixel_data[pixel_id] = (normal.xyz_packed, linear_depth)
+// prev_pixel_data[pixel_id] = (normal.xyz, linear_depth)
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
-    let total_pixels  = render_width * render_height;
+    let total_pixels  = pt.width * pt.height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;
 
@@ -30,20 +30,23 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // If no valid reservoir, nothing to merge
     if (current_reservoir.M == 0u) { return; }
 
-    let ray = ray_buffer[pixel_id];
     let hit = hit_buffer[pixel_id];
-    if (ray.ray_active == 0u || hit.did_hit == 0u) { return; }
+    if (hit.did_hit == 0u) { return; }
 
     // ============================================================
-    // Reconstruct surface info
+    // Reconstruct surface info from BVH (NOT ray_buffer)
     // ============================================================
-    let hit_pos = ray.origin + ray.direction * hit.dist;
     let bw = vec3f(hit.bary.x, hit.bary.y, 1.0 - hit.bary.x - hit.bary.y);
+    let p0 = bvh_pos[hit.idx0].xyz;
+    let p1 = bvh_pos[hit.idx1].xyz;
+    let p2 = bvh_pos[hit.idx2].xyz;
+    let hit_pos = bw.x * p0 + bw.y * p1 + bw.z * p2;
+
     let n0 = bvh_normals[hit.idx0].xyz;
     let n1 = bvh_normals[hit.idx1].xyz;
     let n2 = bvh_normals[hit.idx2].xyz;
     var surface_N = normalize(bw.x * n0 + bw.y * n1 + bw.z * n2);
-    if (dot(surface_N, ray.direction) > 0.0) {
+    if (hit.side < 0.0) {
         surface_N = -surface_N;
     }
     let linear_depth = hit.dist;
@@ -56,11 +59,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // NDC to pixel coords in previous frame
     let uv_prev = vec2f(ndc_prev.x * 0.5 + 0.5, -ndc_prev.y * 0.5 + 0.5);
-    let px_prev = vec2i(i32(uv_prev.x * f32(render_width)), i32(uv_prev.y * f32(render_height)));
+    let px_prev = vec2i(i32(uv_prev.x * f32(pt.width)), i32(uv_prev.y * f32(pt.height)));
 
     // Check within bounds
-    if (px_prev.x < 0 || px_prev.x >= i32(render_width) ||
-        px_prev.y < 0 || px_prev.y >= i32(render_height)) {
+    if (px_prev.x < 0 || px_prev.x >= i32(pt.width) ||
+        px_prev.y < 0 || px_prev.y >= i32(pt.height)) {
         // Out of screen — no temporal data, just keep current
         reservoirFinalize(&current_reservoir, targetPDF(
             hit_pos, surface_N,
@@ -72,7 +75,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
 
-    let prev_pixel_id = u32(px_prev.y) * render_width + u32(px_prev.x);
+    let prev_pixel_id = u32(px_prev.y) * pt.width + u32(px_prev.x);
 
     // ============================================================
     // Geometry consistency check

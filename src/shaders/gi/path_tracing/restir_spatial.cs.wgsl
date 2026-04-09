@@ -5,46 +5,49 @@
 //
 // Uses two separate buffers: reads from reservoir_in, writes to reservoir_out
 // for safe parallel execution (no read-after-write hazard).
+//
+// Does NOT rely on ray_buffer for position/direction (shade has modified it).
 
 @group(0) @binding(0)  var<uniform>              pt:                 PTUniforms;
 @group(0) @binding(1)  var<uniform>              restir:             ReSTIRUniforms;
 @group(0) @binding(2)  var<storage, read>         reservoir_in:       array<Reservoir>;
 @group(0) @binding(3)  var<storage, read_write>   reservoir_out:      array<Reservoir>;
-@group(0) @binding(4)  var<storage, read>         ray_buffer:         array<PTRay>;
-@group(0) @binding(5)  var<storage, read>         hit_buffer:         array<HitRecord>;
+@group(0) @binding(4)  var<storage, read>         hit_buffer:         array<HitRecord>;
+@group(0) @binding(5)  var<storage, read>         bvh_pos:            array<vec4f>;
 @group(0) @binding(6)  var<storage, read>         bvh_normals:        array<vec4f>;
-// Current frame pixel data for geometry checks
+// Current frame pixel data for geometry checks on neighbors
 @group(0) @binding(7)  var<storage, read>         pixel_data:         array<vec4f>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
-    let total_pixels  = render_width * render_height;
+    let total_pixels  = pt.width * pt.height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;
 
-    let ray = ray_buffer[pixel_id];
     let hit = hit_buffer[pixel_id];
 
     // Default: copy input to output
     var result = reservoir_in[pixel_id];
 
-    if (ray.ray_active == 0u || hit.did_hit == 0u || result.M == 0u) {
+    if (hit.did_hit == 0u || result.M == 0u) {
         reservoir_out[pixel_id] = result;
         return;
     }
 
     // ============================================================
-    // Reconstruct surface info for center pixel
+    // Reconstruct surface info from BVH (NOT ray_buffer)
     // ============================================================
-    let hit_pos = ray.origin + ray.direction * hit.dist;
     let bw = vec3f(hit.bary.x, hit.bary.y, 1.0 - hit.bary.x - hit.bary.y);
+    let p0 = bvh_pos[hit.idx0].xyz;
+    let p1 = bvh_pos[hit.idx1].xyz;
+    let p2 = bvh_pos[hit.idx2].xyz;
+    let hit_pos = bw.x * p0 + bw.y * p1 + bw.z * p2;
+
     let n0 = bvh_normals[hit.idx0].xyz;
     let n1 = bvh_normals[hit.idx1].xyz;
     let n2 = bvh_normals[hit.idx2].xyz;
     var surface_N = normalize(bw.x * n0 + bw.y * n1 + bw.z * n2);
-    if (dot(surface_N, ray.direction) > 0.0) {
+    if (hit.side < 0.0) {
         surface_N = -surface_N;
     }
     let linear_depth = hit.dist;
@@ -52,8 +55,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var rng = initRNG(pixel_id ^ 0xABCDu, restir.frame_index);
 
     // Pixel X,Y for neighbor sampling
-    let px_x = pixel_id % render_width;
-    let px_y = pixel_id / render_width;
+    let px_x = pixel_id % pt.width;
+    let px_y = pixel_id / pt.width;
 
     let K = restir.spatial_count;
     let R = f32(restir.spatial_radius);
@@ -72,7 +75,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         let nb_y = i32(px_y) + offset_y;
 
         // Skip out-of-bounds
-        if (nb_x < 0 || nb_x >= i32(render_width) || nb_y < 0 || nb_y >= i32(render_height)) {
+        if (nb_x < 0 || nb_x >= i32(pt.width) || nb_y < 0 || nb_y >= i32(pt.height)) {
             continue;
         }
         // Skip self
@@ -80,7 +83,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             continue;
         }
 
-        let nb_pixel_id = u32(nb_y) * render_width + u32(nb_x);
+        let nb_pixel_id = u32(nb_y) * pt.width + u32(nb_x);
 
         // Geometry consistency check
         let nb_data   = pixel_data[nb_pixel_id];

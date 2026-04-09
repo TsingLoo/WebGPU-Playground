@@ -3,7 +3,8 @@
 // Per pixel: draws M candidate light samples, performs Weighted Reservoir
 // Sampling (WRS) to keep the best one. Writes to reservoir_buffer.
 //
-// Runs after intersect (bounce 0 only). Reads hit_buffer for surface info.
+// Runs after shade (bounce 0). Reads hit_buffer (unchanged) for surface info.
+// Does NOT rely on ray_buffer for position/direction (shade has modified it).
 
 @group(0) @binding(0)  var<uniform>             pt:                 PTUniforms;
 @group(0) @binding(1)  var<uniform>             restir:             ReSTIRUniforms;
@@ -16,38 +17,40 @@
 @group(0) @binding(8)  var<storage, read>        bvh_pos:            array<vec4f>;
 @group(0) @binding(9)  var<storage, read>        bvh_normals:        array<vec4f>;
 @group(0) @binding(10) var<storage, read>        bvh_uvs:            array<vec4f>;
-@group(0) @binding(11) var<storage, read_write>   pixel_data_out:     array<vec4f>;
+@group(0) @binding(11) var<storage, read_write>  pixel_data_out:     array<vec4f>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
-    let total_pixels  = render_width * render_height;
+    let total_pixels  = pt.width * pt.height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;
 
-    let ray = ray_buffer[pixel_id];
     let hit = hit_buffer[pixel_id];
 
-    // If ray missed or is inactive, write empty reservoir
-    if (ray.ray_active == 0u || hit.did_hit == 0u) {
+    // If ray missed, write empty reservoir
+    if (hit.did_hit == 0u) {
         reservoir_buffer[pixel_id] = reservoirEmpty();
         pixel_data_out[pixel_id] = vec4f(0.0, 0.0, 0.0, 0.0);
         return;
     }
 
     // ============================================================
-    // Reconstruct surface point from hit record
+    // Reconstruct surface point from BVH vertex data (NOT ray_buffer)
     // ============================================================
-    let hit_pos = ray.origin + ray.direction * hit.dist;
     let bw = vec3f(hit.bary.x, hit.bary.y, 1.0 - hit.bary.x - hit.bary.y);
+
+    let p0 = bvh_pos[hit.idx0].xyz;
+    let p1 = bvh_pos[hit.idx1].xyz;
+    let p2 = bvh_pos[hit.idx2].xyz;
+    let hit_pos = bw.x * p0 + bw.y * p1 + bw.z * p2;
 
     // Smooth normal interpolation
     let n0 = bvh_normals[hit.idx0].xyz;
     let n1 = bvh_normals[hit.idx1].xyz;
     let n2 = bvh_normals[hit.idx2].xyz;
     var surface_N = normalize(bw.x * n0 + bw.y * n1 + bw.z * n2);
-    if (dot(surface_N, ray.direction) > 0.0) {
+    // Flip normal if back-face (use hit.side flag from intersect)
+    if (hit.side < 0.0) {
         surface_N = -surface_N;
     }
 
@@ -97,7 +100,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             cand_Le     = sun_light.color.rgb * sun_intensity;
             cand_dist   = 10000.0;
             cand_normal = -perturbed_dir;
-            // Source PDF for sun: 1 / (1 + emissive_count > 0 ? 2 : 1) — probability of picking sun
+            // Source PDF for sun
             if (restir.emissive_tri_count > 0u) {
                 cand_pdf_s = 0.5; // 50% chance to pick sun
             } else {
