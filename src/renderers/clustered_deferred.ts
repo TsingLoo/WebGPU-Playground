@@ -148,7 +148,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
         });
 
-        graph.addPass("Deferred Compute Execution")
+        graph.addComputePass("Deferred Compute Execution")
             .readTexture(handles.albedo)
             .readTexture(handles.normal)
             .readTexture(handles.position)
@@ -156,7 +156,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
             .readTexture(handles.depth)
             .readTexture(handles.ssao)
             .writeTexture(shadingOutputHandle)
-            .execute((encoder, pass) => {
+            .execute((shadingComputePass, pass) => {
                 this.createShadingBindGroup();
                 
                 const shadingBG = renderer.device.createBindGroup({
@@ -190,8 +190,6 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                     ]
                 });
 
-                // Deferred shading compute pass
-                const shadingComputePass = encoder.beginComputePass();
                 shadingComputePass.setPipeline(this.shadingComputePipeline);
                 shadingComputePass.setBindGroup(0, shadingBG);
                 shadingComputePass.setBindGroup(1, this.giDynamicBindGroup);
@@ -199,13 +197,12 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 const workgroupsX = Math.max(1, Math.ceil(renderer.canvas.width / 8));
                 const workgroupsY = Math.max(1, Math.ceil(renderer.canvas.height / 8));
                 shadingComputePass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-                shadingComputePass.end();
             });
 
-        graph.addPass("Deferred Blit")
+        graph.addRenderPass("Deferred Blit")
             .readTexture(shadingOutputHandle)
-            .writeTexture(handles.sceneColor)
-            .execute((encoder, pass) => {
+            .addColorAttachment(handles.sceneColor, { clearValue: [0, 0, 0, 1] })
+            .execute((blitPass, pass) => {
                 const blitBG = renderer.device.createBindGroup({
                     label: "blit bind group",
                     layout: this.blitBindGroupLayout,
@@ -215,22 +212,9 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                     ]
                 });
 
-                // Blit pass (no depth needed — fullscreen quad)
-                const blitPass = encoder.beginRenderPass({
-                    label: "Blit Pass",
-                    colorAttachments: [
-                        {
-                            view: pass.getTextureView(handles.sceneColor),
-                            clearValue: [0, 0, 0, 1],
-                            loadOp: "clear",
-                            storeOp: "store"
-                        }
-                    ]
-                });
                 blitPass.setPipeline(this.blitPipeline);
                 blitPass.setBindGroup(0, blitBG);
                 blitPass.draw(3);
-                blitPass.end();
             });
     }
 }
