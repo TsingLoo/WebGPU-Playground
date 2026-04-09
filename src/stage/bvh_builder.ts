@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry } from 'three';
+import { BufferAttribute, BufferGeometry, Box3 } from 'three';
 import { MeshBVH, MeshBVHOptions } from 'three-mesh-bvh';
 import { Entity } from '../engine/Entity';
 import { MeshRenderer } from '../engine/components/MeshRenderer';
@@ -13,6 +13,8 @@ export class BVHData {
     tangentBuffer!: GPUBuffer; // per-vertex tangent (vec4f: xyz = tangent, w = handedness)
     triangleMaterialBuffer!: GPUBuffer; // per-triangle material index
     triangleCount: number = 0;
+    boundingBoxMin: [number, number, number] = [-1, -1, -1];
+    boundingBoxMax: [number, number, number] = [1, 1, 1];
 }
 
 export function buildBVHFromScene(sceneRoot: Entity): BVHData {
@@ -224,6 +226,9 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     };
 
     const bvhData = new BVHData();
+    const boundingBox = bvh.getBoundingBox(new Box3());
+    bvhData.boundingBoxMin = [boundingBox.min.x, boundingBox.min.y, boundingBox.min.z];
+    bvhData.boundingBoxMax = [boundingBox.max.x, boundingBox.max.y, boundingBox.max.z];
     bvhData.nodeBuffer     = createAndUpload("BVH Node Buffer", bvhNodeBufferArray);
     bvhData.positionBuffer = createAndUpload("BVH Position Buffer", wgpuPositions.buffer);
     bvhData.uvBuffer       = createAndUpload("BVH UV Buffer", wgpuUVs.buffer);

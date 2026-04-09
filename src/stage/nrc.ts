@@ -18,7 +18,7 @@ export class NRC {
 
     // Configuration
     enabled = false;
-    learningRate = 0.001;
+    learningRate = 0.2;
     momentum = 0.9;
     debugMode = 0; // 0=off, 1=raw inference, 2=HDR mapped
     sampleStride = 4; // subsample every Nth pixel in x and y
@@ -67,7 +67,7 @@ export class NRC {
         let wOffset = 0;
         
         // Helper to init a layer
-        const initLayer = (fanIn: number, fanOut: number, wSize: number, bSize: number) => {
+        const initLayer = (fanIn: number, fanOut: number, wSize: number, bSize: number, isLast: boolean = false) => {
             void fanOut; // Prevent unused warning
             const limit = Math.sqrt(6.0 / fanIn);
             // Weights
@@ -76,7 +76,7 @@ export class NRC {
             }
             // Biases
             for (let i = 0; i < bSize; i++) {
-                weightsData[wOffset++] = 0.01; // Small positive bias to avoid dead ReLUs
+                weightsData[wOffset++] = isLast ? -1.0 : 0.01; // Avoid vanishing gradients of Sigmoid
             }
         };
 
@@ -87,7 +87,7 @@ export class NRC {
         // Layer 2: 64 in -> 64 out
         initLayer(64, 64, 64 * 64, 64);
         // Layer 3: 64 in -> 3 out
-        initLayer(64, 3, 64 * 3, 3);
+        initLayer(64, 3, 64 * 3, 3, true);
         this.weightsBuffer = device.createBuffer({
             label: "NRC Weights",
             size: NRC.TOTAL_PARAMS * 4,
@@ -212,7 +212,8 @@ export class NRC {
 
         // params: vec4f (lr, num_samples, momentum, frame_count)
         data[8] = this.learningRate;
-        data[9] = 0; // filled at dispatch time with actual count
+        data[9] = NRC.MAX_TRAINING_SAMPLES;
+
         data[10] = this.momentum;
         data[11] = this.frameCount;
 
@@ -253,6 +254,11 @@ export class NRC {
         });
     }
 
+    // Pass the layout for PT collect pipeline to be created
+    getTrainLayout(): GPUBindGroupLayout {
+        return this.trainLayout;
+    }
+
     private createTrainLayout(): GPUBindGroupLayout {
         return device.createBindGroupLayout({
             label: "NRC Train Layout",
@@ -262,6 +268,8 @@ export class NRC {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // training samples
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },          // grad accum
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },          // momentum
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },          // sampleCounter
+
             ],
         });
     }
@@ -392,6 +400,43 @@ export class NRC {
             1
         );
         inferencePass.end();
+    }
+    
+    /**
+     * Executes the training pass only (for Path Tracer integration).
+     * The PT is expected to have populated the training buffer and set the sample counter.
+     */
+    trainOnly(encoder: GPUCommandEncoder) {
+        if (!this.enabled) return;
+        
+        // 1. Train MLP
+        // Update uniform with estimated sample count
+        const estimatedSamples = NRC.MAX_TRAINING_SAMPLES;
+        const paramsUpdate = this.paramsUpdateData;
+        paramsUpdate[0] = this.learningRate;
+        paramsUpdate[1] = estimatedSamples;
+        paramsUpdate[2] = this.momentum;
+        paramsUpdate[3] = this.frameCount;
+        device.queue.writeBuffer(this.nrcUniformBuffer, 32, paramsUpdate);
+
+        const trainBindGroup = device.createBindGroup({
+            layout: this.trainLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.nrcUniformBuffer } },
+                { binding: 1, resource: { buffer: this.weightsBuffer } },
+                { binding: 2, resource: { buffer: this.trainingSamplesBuffer } },
+                { binding: 3, resource: { buffer: this.gradAccumBuffer } },
+                { binding: 4, resource: { buffer: this.momentumBuffer } },
+                { binding: 5, resource: { buffer: this.sampleCounterBuffer } },
+            ],
+        });
+
+        const trainPass = encoder.beginComputePass({ label: "NRC Train (PT)" });
+        trainPass.setPipeline(this.trainPipeline);
+        trainPass.setBindGroup(0, trainBindGroup);
+        // Single workgroup iterates over all samples to avoid float data races
+        trainPass.dispatchWorkgroups(1, 1, 1);
+        trainPass.end();
     }
 
     getInferenceView(): GPUTextureView {

@@ -49,6 +49,7 @@ import nrcCommonRaw from './gi/nrc/nrc_common.wgsl?raw';
 import nrcScatterTrainingRaw from './gi/nrc/nrc_scatter_training.cs.wgsl?raw';
 import nrcTrainRaw from './gi/nrc/nrc_train.cs.wgsl?raw';
 import nrcInferenceRaw from './gi/nrc/nrc_inference.cs.wgsl?raw';
+import nrcPtCollectRaw from './gi/nrc/nrc_pt_collect.cs.wgsl?raw';
 
 // Surfel shaders
 import surfelCommonRaw from './gi/surfel/surfel_common.wgsl?raw';
@@ -322,9 +323,9 @@ export const surfelResolveSrc: string = processSurfelShaderRaw(surfelResolveRaw)
 // ===========================================================================
 const ptCommonSrc: string = evalShaderRaw(ptCommonRaw);
 
-// Builds a complete PT compute shader: common + bvh + pt_common + shader_body
+// Builds a complete PT compute shader: common + nrc_common + bvh + pt_common + shader_body
 function processPTShaderRaw(raw: string): string {
-    return commonSrc + bvhSrc + ptCommonSrc + evalShaderRaw(raw);
+    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + evalShaderRaw(raw);
 }
 
 // RayGen only needs camera + pt_common (no BVH)
@@ -347,3 +348,6 @@ export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(p
 
 // Tonemap: standalone (vertex + fragment in one file, split by entry points)
 export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTonemapRaw);
+
+// NRC Collect Training requires full PT structs and NRC structs
+export const nrcPtCollectSrc: string = processPTShaderRaw(nrcPtCollectRaw);

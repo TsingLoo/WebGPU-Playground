@@ -19,6 +19,8 @@ import * as renderer from '../renderer';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
 import { Renderer } from '../renderer';
+import { pipelineCache } from '../engine/PipelineCache';
+import { NRC } from '../stage/nrc';
 
 // ============================================================
 // PTUniforms layout (matches pt_common.wgsl PTUniforms struct)
@@ -51,6 +53,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private accumWorkBuffer!: GPUBuffer;  // Per-pixel radiance sum (cleared each frame)
     private sampleSumBuffer!: GPUBuffer;  // Persistent sum across all samples
     private ptUniformBuffer!: GPUBuffer;  // PTUniforms (32 bytes)
+    private ptNRCTrainDataBuffer!: GPUBuffer; // Array of NRCWavefrontTrainData
 
     private renderWidth!: number;
     private renderHeight!: number;
@@ -63,15 +66,18 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private shadowTestPipeline!: GPUComputePipeline;
     private missPipeline!: GPUComputePipeline;
     private accumulatePipeline!: GPUComputePipeline;
+    private nrcCollectPipeline!: GPUComputePipeline;
     private tonemapPipeline!: GPURenderPipeline;
 
     // ------------ Bind Group Layouts ------------
     private rayGenLayout!: GPUBindGroupLayout;
     private intersectLayout!: GPUBindGroupLayout;
     private shadeLayout!: GPUBindGroupLayout;
+    private shadeNRCLayout!: GPUBindGroupLayout;
     private shadowTestLayout!: GPUBindGroupLayout;
     private missLayout!: GPUBindGroupLayout;
     private accumulateLayout!: GPUBindGroupLayout;
+    private nrcCollectLayout!: GPUBindGroupLayout;
     private tonemapLayout!: GPUBindGroupLayout;
 
     constructor(stage: Stage) {
@@ -112,6 +118,13 @@ export class WavefrontPathTracingRenderer extends Renderer {
             label: 'PT Uniforms',
             size: 32,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        // ptNRCTrainDataBuffer: array of NRCWavefrontTrainData (96 bytes each)
+        this.ptNRCTrainDataBuffer = dev.createBuffer({
+            label: 'PT NRC Train Data',
+            size: NRC.MAX_TRAINING_SAMPLES * 96,
+            usage: GPUBufferUsage.STORAGE,
         });
 
         this.uploadPTUniforms();
@@ -164,6 +177,16 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
+        this.shadeNRCLayout = dev.createBindGroupLayout({
+            label: 'PT Shade NRC Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },   // NRCUniforms
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // weights
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // sampleCounter
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // ptNRCTrainData
+            ]
+        });
+
         this.shadowTestLayout = dev.createBindGroupLayout({
             label: 'PT ShadowTest Layout',
             entries: [
@@ -197,6 +220,17 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
+        this.nrcCollectLayout = dev.createBindGroupLayout({
+            label: 'PT NRC Collect Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },  // NRCUniforms
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // ptNRCTrainData
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // accum_buffer
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // sampleCounter
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },  // trainingSamples
+            ]
+        });
+
         this.tonemapLayout = dev.createBindGroupLayout({
             label: 'PT Tonemap Layout',
             entries: [
@@ -207,18 +241,26 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
         // ---- Compute Pipelines ----
         const mkCompute = (label: string, code: string, layout: GPUBindGroupLayout) =>
-            dev.createComputePipeline({
+            pipelineCache.getComputePipeline(dev, {
                 label,
                 layout: dev.createPipelineLayout({ bindGroupLayouts: [layout] }),
                 compute: { module: dev.createShaderModule({ label, code }), entryPoint: 'main' }
-            });
+            }, label);
+
+        const mkComputeEx = (label: string, code: string, layouts: GPUBindGroupLayout[]) =>
+            pipelineCache.getComputePipeline(dev, {
+                label,
+                layout: dev.createPipelineLayout({ bindGroupLayouts: layouts }),
+                compute: { module: dev.createShaderModule({ label, code }), entryPoint: 'main' }
+            }, label);
 
         this.rayGenPipeline     = mkCompute('WPT RayGen',     shaders.ptRayGenSrc,     this.rayGenLayout);
         this.intersectPipeline  = mkCompute('WPT Intersect',  shaders.ptIntersectSrc,  this.intersectLayout);
-        this.shadePipeline      = mkCompute('WPT Shade',      shaders.ptShadeSrc,      this.shadeLayout);
+        this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeNRCLayout]);
         this.shadowTestPipeline = mkCompute('WPT ShadowTest', shaders.ptShadowTestSrc, this.shadowTestLayout);
         this.missPipeline       = mkCompute('WPT Miss',       shaders.ptMissSrc,       this.missLayout);
         this.accumulatePipeline = mkCompute('WPT Accumulate', shaders.ptAccumulateSrc, this.accumulateLayout);
+        this.nrcCollectPipeline = mkCompute('WPT NRC Collect', shaders.nrcPtCollectSrc, this.nrcCollectLayout);
 
         // ---- Tonemap Render Pipeline ----
         const tonemapModule = dev.createShaderModule({ label: 'WPT Tonemap', code: shaders.ptTonemapSrc });
@@ -312,6 +354,17 @@ export class WavefrontPathTracingRenderer extends Renderer {
             addressModeU: 'repeat', addressModeV: 'repeat'
         });
 
+        // Initialize NRC states
+        if (this.stage.nrc.enabled) {
+            this.stage.nrc.updateUniforms(); // ensures params are ready
+            // Reset the sample counter
+            encoder.copyBufferToBuffer(
+                this.stage.nrc.sampleCounterZeroBuffer, 0,
+                this.stage.nrc.sampleCounterBuffer, 0,
+                4
+            );
+        }
+
         // ---- Pass 0: Primary Ray Generation ----
         {
             const bg = dev.createBindGroup({
@@ -374,9 +427,21 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
                     ]
                 });
+                
+                const nrcBg = dev.createBindGroup({
+                    layout: this.shadeNRCLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
+                        { binding: 1, resource: { buffer: this.stage.nrc.weightsBuffer } },
+                        { binding: 2, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
+                        { binding: 3, resource: { buffer: this.ptNRCTrainDataBuffer } },
+                    ]
+                });
+
                 const pass = encoder.beginComputePass({ label: `WPT Shade b${bounce}` });
                 pass.setPipeline(this.shadePipeline);
                 pass.setBindGroup(0, bg);
+                pass.setBindGroup(1, nrcBg);
                 pass.dispatchWorkgroups(r1D, 1, 1);
                 pass.end();
             }
@@ -420,6 +485,29 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.dispatchWorkgroups(r1D, 1, 1);
                 pass.end();
             }
+        }
+
+        // ---- Pass: NRC Collect & Train (If enabled) ----
+        if (this.stage.nrc.enabled) {
+            const bg = dev.createBindGroup({
+                layout: this.nrcCollectLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
+                    { binding: 1, resource: { buffer: this.ptNRCTrainDataBuffer } },
+                    { binding: 2, resource: { buffer: this.accumWorkBuffer } },
+                    { binding: 3, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
+                    { binding: 4, resource: { buffer: this.stage.nrc.trainingSamplesBuffer } },
+                ]
+            });
+            const pass = encoder.beginComputePass({ label: 'WPT NRC Collect' });
+            pass.setPipeline(this.nrcCollectPipeline);
+            pass.setBindGroup(0, bg);
+            // Dispatch 64 threads, max 4096 samples = 64 workgroups
+            pass.dispatchWorkgroups(Math.ceil(NRC.MAX_TRAINING_SAMPLES / 64), 1, 1);
+            pass.end();
+
+            // Run MLP update!
+            this.stage.nrc.trainOnly(encoder);
         }
 
         // ---- Pass: Accumulate (add frame to persistent sum) ----

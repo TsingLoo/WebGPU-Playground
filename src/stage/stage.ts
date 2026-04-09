@@ -8,6 +8,7 @@ import { Scene } from "../engine/Scene";
 import { VSM } from "./vsm";
 import { SSAO } from "./ssao";
 import { SSR } from "./ssr";
+import { NRC } from "./nrc";
 
 export class Stage {
     scene: Scene;
@@ -20,6 +21,7 @@ export class Stage {
     vsm: VSM;
     ssao: SSAO;
     ssr: SSR;
+    nrc: NRC;
 
     // Sun light
     sunLightBuffer: GPUBuffer;
@@ -47,6 +49,7 @@ export class Stage {
         this.vsm = new VSM(this.camera);
         this.ssao = new SSAO();
         this.ssr = new SSR();
+        this.nrc = new NRC(this.camera, this.environment);
 
         // Sync sun direction into VSM
         this.vsm.sunDirection = this.sunDirection;
