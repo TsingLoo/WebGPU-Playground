@@ -1,4 +1,5 @@
 import * as renderer from '../renderer';
+import { RenderTexManager, RenderResource } from '../engine/RenderTexManager';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
 import { RadianceCascades } from '../stage/radiance_cascades';
@@ -14,19 +15,13 @@ import { HiZPass } from './passes/hiz_pass';
 import { SSRPass } from './passes/ssr_pass';
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
-    depthTexture: GPUTexture;
     depthTextureView: GPUTextureView;
 
-    sceneColorTexture: GPUTexture;
     sceneColorTextureView: GPUTextureView;
 
-    gBufferAlbedoTexture: GPUTexture;
     gBufferAlbedoTextureView: GPUTextureView;
-    gBufferNormalTexture: GPUTexture;
     gBufferNormalTextureView: GPUTextureView;
-    gBufferPositionTexture: GPUTexture;
     gBufferPositionTextureView: GPUTextureView;
-    gBufferSpecularTexture: GPUTexture;
     gBufferSpecularTextureView: GPUTextureView;
 
     tileOffsetsDeviceBuffer: GPUBuffer;
@@ -62,7 +57,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     constructor(stage: Stage) {
         super(stage);
 
-        const gBufSize = [renderer.canvas.width, renderer.canvas.height];
         this.stageEnv = stage.environment;
         this.stage = stage;
         this.radianceCascades = stage.radianceCascades;
@@ -82,49 +76,36 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
 
         // Depth buffer
-        this.depthTexture = renderer.device.createTexture({
-            size: gBufSize,
+        this.depthTextureView = RenderTexManager.getTextureView(RenderResource.SceneDepth, {
             format: "depth24plus",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
         });
-        this.depthTextureView = this.depthTexture.createView();
 
-        this.sceneColorTexture = renderer.device.createTexture({
-            label: "Scene Color Texture",
-            size: gBufSize,
+        this.sceneColorTextureView = RenderTexManager.getTextureView(RenderResource.SceneColor, {
             format: "rgba16float",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
         });
-        this.sceneColorTextureView = this.sceneColorTexture.createView();
 
         // G-Buffer textures
-        this.gBufferAlbedoTexture = renderer.device.createTexture({
-            label: "G-Buffer Albedo Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        this.gBufferAlbedoTextureView = RenderTexManager.getTextureView(RenderResource.GBufferAlbedo, {
+            format: 'rgba16float',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
-        this.gBufferAlbedoTextureView = this.gBufferAlbedoTexture.createView();
 
-        this.gBufferNormalTexture = renderer.device.createTexture({
-            label: "G-Buffer Normal Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        this.gBufferNormalTextureView = RenderTexManager.getTextureView(RenderResource.GBufferNormal, {
+            format: 'rgba16float',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
-        this.gBufferNormalTextureView = this.gBufferNormalTexture.createView();
 
-        this.gBufferPositionTexture = renderer.device.createTexture({
-            label: "G-Buffer Position Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        this.gBufferPositionTextureView = RenderTexManager.getTextureView(RenderResource.GBufferPosition, {
+            format: 'rgba16float',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
-        this.gBufferPositionTextureView = this.gBufferPositionTexture.createView();
 
-        this.gBufferSpecularTexture = renderer.device.createTexture({
-            label: "G-Buffer Specular Texture",
-            size: gBufSize, format: 'rgba8unorm',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        this.gBufferSpecularTextureView = RenderTexManager.getTextureView(RenderResource.GBufferSpecular, {
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
-        this.gBufferSpecularTextureView = this.gBufferSpecularTexture.createView();
 
         // Cluster buffers
         this.tileOffsetsDeviceBuffer = renderer.device.createBuffer({
@@ -183,23 +164,17 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             globalLightIndicesBuffer: this.globalLightIndicesDeviceBuffer,
             clusterSetBuffer: this.clusterSetDeviceBuffer,
             zeroBuffer: this.zeroDeviceBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView()
+            hizTextureView: this.hizPass.hizFullTextureView
         });
 
         // Initialize pass modules
         this.ssaoPass = new SSAOPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView(),
-            gBufferNormalView: this.gBufferNormalTextureView,
             ssaoUniformsBuffer: this.stage.ssao.uniformsBuffer,
         });
 
         this.ssrPass = new SSRPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView(),
-            normalTextureView: this.gBufferNormalTextureView,
-            specularTextureView: this.gBufferSpecularTextureView,
-            depthTextureView: this.depthTextureView,
             ssrUniformsBuffer: this.stage.ssr.uniformsBuffer,
         });
 
@@ -211,7 +186,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         this.volumetricPass = new VolumetricPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            depthTextureView: this.depthTextureView,
             sunLightBuffer: this.stage.sunLightBuffer,
             vsm: this.vsm,
         });
@@ -363,7 +337,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.createShadingBindGroup();
 
         // 8. SSAO
-        this.ssaoPass.execute(encoder, this.stage.ssao.enabled);
+        this.ssaoPass.execute(encoder, this.stage.ssao.enabled, this.hizPass.hizFullTextureView, this.gBufferNormalTextureView);
 
         // 9. Sub-class shading pass
         this.executeShadingPass(encoder, this.sceneColorTextureView);
@@ -372,11 +346,18 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.skyboxPass.execute(encoder, this.sceneColorTextureView, this.depthTextureView);
 
         // 11. SSR & Composite
-        this.ssrPass.execute(encoder, this.stage.ssr.enabled, this.geometryBindGroup, this.sceneColorTextureView, this.gBufferAlbedoTextureView, canvasTextureView);
+        this.ssrPass.execute(encoder, this.stage.ssr.enabled, this.geometryBindGroup, 
+            this.sceneColorTextureView, 
+            this.gBufferAlbedoTextureView, 
+            this.gBufferNormalTextureView,
+            this.gBufferSpecularTextureView,
+            this.depthTextureView,
+            this.hizPass.hizFullTextureView,
+            canvasTextureView);
 
         // 12. Volumetric lighting
         if (this.stage.sunVolumetricEnabled) {
-            this.volumetricPass.execute(encoder, canvasTextureView);
+            this.volumetricPass.execute(encoder, canvasTextureView, this.depthTextureView);
         }
 
         // 13. Debug bounds

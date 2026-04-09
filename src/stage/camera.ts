@@ -166,6 +166,13 @@ export class Camera {
         }
     }
 
+    onResize(newAspectRatio: number) {
+        this.projMat = mat4.perspective(toRadians(fovYDegrees), newAspectRatio, Camera.nearPlane, Camera.farPlane);
+        // Convert [0, 1] standard Z mapping to Reverse Z [1, 0] mapping
+        this.projMat[10] = -this.projMat[10] - 1.0;
+        this.projMat[14] = -this.projMat[14];
+    }
+
     onFrame(deltaTime: number) {
         this.processInput(deltaTime);
 
