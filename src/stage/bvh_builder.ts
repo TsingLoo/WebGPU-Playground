@@ -8,7 +8,9 @@ export class BVHData {
     nodeBuffer!: GPUBuffer;
     positionBuffer!: GPUBuffer;
     indexBuffer!: GPUBuffer;
-    uvBuffer!: GPUBuffer;  // per-vertex UV (vec4f: xy = UV, zw = pad)
+    uvBuffer!: GPUBuffer;      // per-vertex UV (vec4f: xy = UV, zw = pad)
+    normalBuffer!: GPUBuffer;  // per-vertex smooth normal (vec4f: xyz = normal, w = 0)
+    tangentBuffer!: GPUBuffer; // per-vertex tangent (vec4f: xyz = tangent, w = handedness)
     triangleMaterialBuffer!: GPUBuffer; // per-triangle material index
     triangleCount: number = 0;
 }
@@ -39,12 +41,16 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     console.log(`Total Triangles for BVH: ${totalTris}`);
     
     const positions = new Float32Array(totalVerts * 3);
+    const normals = new Float32Array(totalVerts * 3);
+    const tangents = new Float32Array(totalVerts * 4);
     const uvs = new Float32Array(totalVerts * 2);
     const indices = new Uint32Array(totalTris * 3);
     const vertexMaterials = new Uint32Array(totalVerts); // Map vertex -> material
     
     let triOffset = 0;
     let vertOffset = 0;
+    let normalOffset = 0;
+    let tangentOffset = 0;
     let uvOffset = 0;
     
     nodes = [sceneRoot];
@@ -58,19 +64,70 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
                 const pos = prim.cpuPositions;
                 const ind = prim.cpuIndices;
                 const primUVs = prim.cpuUVs;
+                const primNormals = prim.cpuNormals;
+                const primTangents = prim.cpuTangents;
                 const mat = node.worldTransform;
                 const materialId = prim.material.id;
                 
                 const baseVertIndex = vertOffset / 3;
                 const numPrimVerts = pos.length / 3;
                 
-                // Add transformed vertices + UVs
+                // Compute normal matrix (inverse transpose of upper-left 3x3)
+                // For Sponza with only uniform-ish transforms, transpose of inverse ~= mat itself
+                // Proper inverse-transpose of upper-left 3x3:
+                const m00 = mat[0], m01 = mat[1], m02 = mat[2];
+                const m10 = mat[4], m11 = mat[5], m12 = mat[6];
+                const m20 = mat[8], m21 = mat[9], m22 = mat[10];
+                
+                // Add transformed vertices + normals + tangents + UVs
                 for (let i = 0; i < pos.length; i += 3) {
                     const x = pos[i], y = pos[i+1], z = pos[i+2];
+                    // Transform position by world matrix
                     positions[vertOffset++] = x*mat[0] + y*mat[4] + z*mat[8] + mat[12];
                     positions[vertOffset++] = x*mat[1] + y*mat[5] + z*mat[9] + mat[13];
                     positions[vertOffset++] = x*mat[2] + y*mat[6] + z*mat[10] + mat[14];
                     vertexMaterials[baseVertIndex + i/3] = materialId;
+                    
+                    // Transform normal by upper-left 3x3 (for uniform scale, same as world matrix)
+                    if (primNormals) {
+                        const nx = primNormals[i], ny = primNormals[i+1], nz = primNormals[i+2];
+                        let tnx = nx*m00 + ny*m10 + nz*m20;
+                        let tny = nx*m01 + ny*m11 + nz*m21;
+                        let tnz = nx*m02 + ny*m12 + nz*m22;
+                        const len = Math.sqrt(tnx*tnx + tny*tny + tnz*tnz);
+                        if (len > 0.0001) { tnx /= len; tny /= len; tnz /= len; }
+                        normals[normalOffset++] = tnx;
+                        normals[normalOffset++] = tny;
+                        normals[normalOffset++] = tnz;
+                    } else {
+                        normals[normalOffset++] = 0;
+                        normals[normalOffset++] = 1;
+                        normals[normalOffset++] = 0;
+                    }
+                }
+                
+                // Transform tangents by world matrix (direction only, preserve handedness)
+                if (primTangents) {
+                    for (let i = 0; i < numPrimVerts; i++) {
+                        const tx = primTangents[i*4], ty = primTangents[i*4+1], tz = primTangents[i*4+2];
+                        const tw = primTangents[i*4+3]; // handedness
+                        let ttx = tx*m00 + ty*m10 + tz*m20;
+                        let tty = tx*m01 + ty*m11 + tz*m21;
+                        let ttz = tx*m02 + ty*m12 + tz*m22;
+                        const len = Math.sqrt(ttx*ttx + tty*tty + ttz*ttz);
+                        if (len > 0.0001) { ttx /= len; tty /= len; ttz /= len; }
+                        tangents[tangentOffset++] = ttx;
+                        tangents[tangentOffset++] = tty;
+                        tangents[tangentOffset++] = ttz;
+                        tangents[tangentOffset++] = tw;
+                    }
+                } else {
+                    for (let i = 0; i < numPrimVerts; i++) {
+                        tangents[tangentOffset++] = 1;
+                        tangents[tangentOffset++] = 0;
+                        tangents[tangentOffset++] = 0;
+                        tangents[tangentOffset++] = 1;
+                    }
                 }
                 
                 // Copy UVs (no transform needed)
@@ -127,6 +184,19 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
         wgpuUVs[i*4 + 3] = 0;
     }
     
+    // Pack normals to vec4f (xyz = normal, w = 0)
+    const wgpuNormals = new Float32Array(totalVerts * 4);
+    for (let i = 0; i < totalVerts; i++) {
+        wgpuNormals[i*4 + 0] = normals[i*3 + 0];
+        wgpuNormals[i*4 + 1] = normals[i*3 + 1];
+        wgpuNormals[i*4 + 2] = normals[i*3 + 2];
+        wgpuNormals[i*4 + 3] = 0;
+    }
+    
+    // Tangents are already vec4f (xyz = tangent, w = handedness)
+    const wgpuTangents = new Float32Array(totalVerts * 4);
+    wgpuTangents.set(tangents);
+    
     // array<vec4u> stride 16. Pack `(i0, i1, i2, matId)`.
     const wgpuIndices = new Uint32Array(totalTris * 4);
     for (let i = 0; i < totalTris; i++) {
@@ -144,40 +214,23 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     }
     
     // 4. Create WebGPU Buffers
-    const nodeGpuBuffer = device.createBuffer({
-        label: "BVH Node Buffer",
-        size: bvhNodeBufferArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-    device.queue.writeBuffer(nodeGpuBuffer, 0, bvhNodeBufferArray);
-    
-    const posGpuBuffer = device.createBuffer({
-        label: "BVH Position Buffer",
-        size: wgpuPositions.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-    device.queue.writeBuffer(posGpuBuffer, 0, wgpuPositions);
-    
-    const uvGpuBuffer = device.createBuffer({
-        label: "BVH UV Buffer",
-        size: wgpuUVs.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-    device.queue.writeBuffer(uvGpuBuffer, 0, wgpuUVs);
-    
-    const indexGpuBuffer = device.createBuffer({
-        label: "BVH Index Buffer",
-        size: wgpuIndices.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    });
-    device.queue.writeBuffer(indexGpuBuffer, 0, wgpuIndices);
+    const createAndUpload = (label: string, data: ArrayBuffer): GPUBuffer => {
+        const buf = device.createBuffer({
+            label, size: data.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(buf, 0, data);
+        return buf;
+    };
 
     const bvhData = new BVHData();
-    bvhData.nodeBuffer = nodeGpuBuffer;
-    bvhData.positionBuffer = posGpuBuffer;
-    bvhData.uvBuffer = uvGpuBuffer;
-    bvhData.indexBuffer = indexGpuBuffer;
-    bvhData.triangleCount = totalTris;
+    bvhData.nodeBuffer     = createAndUpload("BVH Node Buffer", bvhNodeBufferArray);
+    bvhData.positionBuffer = createAndUpload("BVH Position Buffer", wgpuPositions.buffer);
+    bvhData.uvBuffer       = createAndUpload("BVH UV Buffer", wgpuUVs.buffer);
+    bvhData.normalBuffer   = createAndUpload("BVH Normal Buffer", wgpuNormals.buffer);
+    bvhData.tangentBuffer  = createAndUpload("BVH Tangent Buffer", wgpuTangents.buffer);
+    bvhData.indexBuffer    = createAndUpload("BVH Index Buffer", wgpuIndices.buffer);
+    bvhData.triangleCount  = totalTris;
     console.log("BVH Generation Complete.");
     
     return bvhData;

@@ -20,16 +20,19 @@ struct PTRay {
     _pad:            vec2u,   //  8
 }; // 64 bytes
 
-// 48 bytes — result of BVH intersection for one ray
+// 80 bytes — result of BVH intersection for one ray
 struct HitRecord {
-    pos:    vec3f,  // 12
-    dist:   f32,    //  4
-    normal: vec3f,  // 12
-    side:   f32,    //  4  +1.0 = front face, -1.0 = back face
-    uv:     vec2f,  //  8
-    mat_id: u32,    //  4
-    did_hit: u32,   //  4  0=miss, 1=hit  (named did_hit to avoid potential reserved 'hit')
-}; // 48 bytes
+    pos:          vec3f,  // 12
+    dist:         f32,    //  4
+    normal:       vec3f,  // 12  smooth interpolated vertex normal
+    side:         f32,    //  4  +1.0 = front face, -1.0 = back face
+    uv:           vec2f,  //  8
+    mat_id:       u32,    //  4
+    did_hit:      u32,    //  4  0=miss, 1=hit
+    tangent:      vec4f,  // 16  xyz=tangent, w=handedness (for TBN)
+    geom_normal:  vec3f,  // 12  geometric normal (for ray offset)
+    _pad2:        f32,    //  4
+}; // 80 bytes
 
 // 48 bytes — NEE shadow ray, one per active pixel
 struct ShadowRay {
@@ -41,16 +44,18 @@ struct ShadowRay {
     shadow_active: u32,   //  4  (named shadow_active to avoid WGSL reserved 'active')
 }; // 48 bytes
 
-// Unpacked material (from global materials buffer, 12 floats = 3 × vec4f per entry)
+// Unpacked material (from global materials buffer, 16 floats = 4 × vec4f per entry)
 struct PTMaterial {
-    albedo:       vec3f,
-    alpha:        f32,
-    roughness:    f32,
-    metallic:     f32,
-    tex_layer:    i32,     // index into baseColor texture array (-1 = none)
-    transmission: f32,     // 0=opaque, 1=fully transmissive
-    ior:          f32,
-    emissive:     vec3f,
+    albedo:           vec3f,
+    alpha:            f32,
+    roughness:        f32,
+    metallic:         f32,
+    tex_layer:        i32,     // index into baseColor texture array (-1 = none)
+    transmission:     f32,     // 0=opaque, 1=fully transmissive
+    ior:              f32,
+    emissive:         vec3f,
+    normal_tex_layer: i32,     // index into normal map texture array (-1 = none)
+    mr_tex_layer:     i32,     // index into metallic-roughness texture array (-1 = none)
 };
 
 // ============================================================
@@ -125,25 +130,27 @@ fn sampleGGX(n: vec3f, roughness: f32, rng: ptr<function, u32>) -> vec3f {
 }
 
 // ============================================================
-// Material unpack (3 × vec4f = 12 floats per material entry)
-// ============================================================
+// Material unpack (4 × vec4f = 16 floats per material entry)
 fn unpackPTMaterial(
     mats: ptr<storage, array<vec4f>, read>,
     mat_id: u32
 ) -> PTMaterial {
-    let base = mat_id * 3u;
+    let base = mat_id * 4u;
     let r0 = (*mats)[base + 0u];
     let r1 = (*mats)[base + 1u];
     let r2 = (*mats)[base + 2u];
+    let r3 = (*mats)[base + 3u];
     var m: PTMaterial;
-    m.albedo       = r0.xyz;
-    m.alpha        = r0.w;
-    m.roughness    = r1.x;
-    m.metallic     = r1.y;
-    m.tex_layer    = bitcast<i32>(r1.z);
-    m.transmission = r1.w;
-    m.ior          = r2.x;
-    m.emissive     = r2.yzw;
+    m.albedo           = r0.xyz;
+    m.alpha            = r0.w;
+    m.roughness        = r1.x;
+    m.metallic         = r1.y;
+    m.tex_layer        = bitcast<i32>(r1.z);
+    m.transmission     = r1.w;
+    m.ior              = r2.x;
+    m.emissive         = r2.yzw;
+    m.normal_tex_layer = bitcast<i32>(r3.x);
+    m.mr_tex_layer     = bitcast<i32>(r3.y);
     return m;
 }
 

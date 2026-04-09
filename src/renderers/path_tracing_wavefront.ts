@@ -98,8 +98,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
         // Ray buffer: 64 bytes per pixel
         this.rayBuffer = dev.createBuffer({ label: 'PT Ray Buffer',    size: this.totalPixels * 64, usage: storageUsage });
-        // Hit buffer: 48 bytes per pixel
-        this.hitBuffer = dev.createBuffer({ label: 'PT Hit Buffer',    size: this.totalPixels * 48, usage: storageUsage });
+        // Hit buffer: 80 bytes per pixel (expanded for smooth normal + tangent + geom_normal)
+        this.hitBuffer = dev.createBuffer({ label: 'PT Hit Buffer',    size: this.totalPixels * 80, usage: storageUsage });
         // Shadow ray buffer: 48 bytes per pixel
         this.shadowBuffer = dev.createBuffer({ label: 'PT Shadow Buf', size: this.totalPixels * 48, usage: storageUsage });
         // Per-frame radiance accumulator (cleared after each frame)
@@ -141,6 +141,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh pos
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh indices
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh uvs
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh normals
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh tangents
             ]
         });
 
@@ -156,7 +158,11 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // materials
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // sun_light
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color
-                { binding: 9, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // sampler
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // base_color sampler
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // normal_map
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // normal_map sampler
+                { binding: 12, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // mr_tex
+                { binding: 13, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // mr sampler
             ]
         });
 
@@ -337,6 +343,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 4, resource: { buffer: bvhData.positionBuffer } },
                         { binding: 5, resource: { buffer: bvhData.indexBuffer } },
                         { binding: 6, resource: { buffer: bvhData.uvBuffer } },
+                        { binding: 7, resource: { buffer: bvhData.normalBuffer } },
+                        { binding: 8, resource: { buffer: bvhData.tangentBuffer } },
                     ]
                 });
                 const pass = encoder.beginComputePass({ label: `WPT Intersect b${bounce}` });
@@ -361,6 +369,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 7, resource: { buffer: this.stage.sunLightBuffer } },
                         { binding: 8, resource: scene.baseColorTexArrayView },
                         { binding: 9, resource: baseColorSampler },
+                        { binding: 10, resource: scene.normalMapTexArrayView },
+                        { binding: 11, resource: baseColorSampler },
+                        { binding: 12, resource: scene.mrTexArrayView },
+                        { binding: 13, resource: baseColorSampler },
                     ]
                 });
                 const pass = encoder.beginComputePass({ label: `WPT Shade b${bounce}` });

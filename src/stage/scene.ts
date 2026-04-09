@@ -501,7 +501,7 @@ export class Scene {
         }
 
         let sceneMaterials: Material[] = [];
-        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 12); // 12 floats per material (48 bytes)
+        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 16); // 16 floats per material (64 bytes)
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
         let defaultMetallic = 0.0;
@@ -516,7 +516,7 @@ export class Scene {
                 }
                 sceneMaterials.push(currentMat);
                 
-                // Pack for global materials buffer (12 floats)
+                // Pack for global materials buffer (16 floats)
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
@@ -533,26 +533,31 @@ export class Scene {
                 let emissiveStrength = emissiveExt?.emissiveStrength ?? 1.0;
 
                 let texLayer = -1; // No texture layer lookup in the old scene path
+                const base = i * 16;
 
-                // mat_data0: xyz = albedo, w = alpha
-                materialDataArray[i * 12 + 0] = baseColorFactor[0] ?? 1.0;
-                materialDataArray[i * 12 + 1] = baseColorFactor[1] ?? 1.0;
-                materialDataArray[i * 12 + 2] = baseColorFactor[2] ?? 1.0;
-                materialDataArray[i * 12 + 3] = baseColorFactor[3] ?? 1.0;
+                // r0: albedo.rgb, alpha
+                materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
+                materialDataArray[base + 1] = baseColorFactor[1] ?? 1.0;
+                materialDataArray[base + 2] = baseColorFactor[2] ?? 1.0;
+                materialDataArray[base + 3] = baseColorFactor[3] ?? 1.0;
 
-                // mat_data1: x = roughness, y = metallic, z = tex_layer (bitcast), w = transmission
-                materialDataArray[i * 12 + 4] = roughness;
-                materialDataArray[i * 12 + 5] = metallic;
-                let texLayerArray = new Int32Array([texLayer]);
-                let texLayerFloatArray = new Float32Array(texLayerArray.buffer);
-                materialDataArray[i * 12 + 6] = texLayerFloatArray[0];
-                materialDataArray[i * 12 + 7] = transmission;
+                // r1: roughness, metallic, tex_layer, transmission
+                materialDataArray[base + 4] = roughness;
+                materialDataArray[base + 5] = metallic;
+                new Int32Array(materialDataArray.buffer, (base + 6) * 4, 1)[0] = texLayer;
+                materialDataArray[base + 7] = transmission;
 
-                // mat_data2: x = ior, yzw = emissive
-                materialDataArray[i * 12 + 8] = ior;
-                materialDataArray[i * 12 + 9] = emissiveFactor[0] * emissiveStrength;
-                materialDataArray[i * 12 + 10] = emissiveFactor[1] * emissiveStrength;
-                materialDataArray[i * 12 + 11] = emissiveFactor[2] * emissiveStrength;
+                // r2: ior, emissive.rgb
+                materialDataArray[base + 8] = ior;
+                materialDataArray[base + 9] = emissiveFactor[0] * emissiveStrength;
+                materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
+                materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
+
+                // r3: normal_tex_layer, mr_tex_layer, pad, pad
+                new Int32Array(materialDataArray.buffer, (base + 12) * 4, 1)[0] = -1;
+                new Int32Array(materialDataArray.buffer, (base + 13) * 4, 1)[0] = -1;
+                materialDataArray[base + 14] = 0.0;
+                materialDataArray[base + 15] = 0.0;
             }
         }
 

@@ -38,7 +38,7 @@ setupLoaders();
 let scene = new Scene();
 const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
 scene.root.addChild(gltfResult.rootEntity);
-await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.baseColorImages.length);
+await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.normalMapImages, gltfResult.mrImages, gltfResult.baseColorImages.length);
 scene.bvhData = buildBVHFromScene(scene.root);
 
 const voxelResult = buildVoxelGrid(scene.root);
@@ -522,7 +522,7 @@ modelFileInput.addEventListener('change', async (event) => {
         const result = await loadGltfBuffer(buffer, 0, 0); // brand new scene starts from offset 0
         newScene.root.addChild(result.rootEntity);
         
-        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
         newScene.bvhData = buildBVHFromScene(newScene.root);
         
         const voxelResult = buildVoxelGrid(newScene.root);
@@ -582,7 +582,7 @@ appendModelFileInput.addEventListener('change', async (event) => {
         const result = await loadGltfBuffer(buffer, scene.materialCount, scene.layerCount);
         scene.root.addChild(result.rootEntity);
         
-        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
         scene.bvhData = buildBVHFromScene(scene.root);
         
         const voxelResult = buildVoxelGrid(scene.root);
