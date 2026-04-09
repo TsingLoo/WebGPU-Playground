@@ -57,6 +57,8 @@ struct PTMaterial {
     emissive:         vec3f,
     normal_tex_layer: i32,     // index into normal map texture array (-1 = none)
     mr_tex_layer:     i32,     // index into metallic-roughness texture array (-1 = none)
+    alpha_cutoff:     f32,     // alpha test threshold
+    alpha_mode:       u32,     // 0=OPAQUE, 1=MASK, 2=BLEND
 };
 
 // ============================================================
@@ -166,6 +168,8 @@ fn unpackPTMaterial(
     m.emissive         = r2.yzw;
     m.normal_tex_layer = bitcast<i32>(r3.x);
     m.mr_tex_layer     = bitcast<i32>(r3.y);
+    m.alpha_cutoff     = r3.z;
+    m.alpha_mode       = bitcast<u32>(r3.w);
     return m;
 }
 

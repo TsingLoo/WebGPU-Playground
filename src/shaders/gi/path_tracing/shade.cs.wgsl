@@ -99,7 +99,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // Alpha test: if the surface is transparent (leaf cutouts, etc.), pass through
-    if (final_alpha < 0.5) {
+    if (mat.alpha_mode != 0u && final_alpha < mat.alpha_cutoff) {
         // Advance the ray slightly past the hit point and continue tracing
         ray.origin    = hit_pos + ray.direction * 0.001;
         // Don't change direction, throughput, or bounce — the ray just passes through
