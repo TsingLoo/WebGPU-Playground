@@ -20,19 +20,20 @@ struct PTRay {
     _pad:            vec2u,   //  8
 }; // 64 bytes
 
-// 80 bytes — result of BVH intersection for one ray
+// 48 bytes — compact hit; shade reconstructs pos/normal/tangent/uv from BVH
 struct HitRecord {
-    pos:          vec3f,  // 12
-    dist:         f32,    //  4
-    normal:       vec3f,  // 12  smooth interpolated vertex normal
-    side:         f32,    //  4  +1.0 = front face, -1.0 = back face
-    uv:           vec2f,  //  8
-    mat_id:       u32,    //  4
-    did_hit:      u32,    //  4  0=miss, 1=hit
-    tangent:      vec4f,  // 16  xyz=tangent, w=handedness (for TBN)
-    geom_normal:  vec3f,  // 12  geometric normal (for ray offset)
-    _pad2:        f32,    //  4
-}; // 80 bytes
+    dist:    f32,    //  4  ray t-parameter
+    side:    f32,    //  4  +1.0 = front, -1.0 = back
+    bary:    vec2f,  //  8  barycentric (x,y); z = 1-x-y
+    idx0:    u32,    //  4  vertex index 0
+    idx1:    u32,    //  4  vertex index 1
+    idx2:    u32,    //  4  vertex index 2
+    mat_id:  u32,    //  4  material id
+    did_hit: u32,    //  4  0=miss, 1=hit
+    _pad0:   u32,    //  4
+    _pad1:   u32,    //  4
+    _pad2:   u32,    //  4
+}; // 48 bytes
 
 // 48 bytes — NEE shadow ray, one per active pixel
 struct ShadowRay {
