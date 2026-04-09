@@ -61,63 +61,50 @@ export class SSRPass {
         });
     }
 
-    addToGraph(graph: RenderGraph, enabled: boolean, 
-            cameraBindGroup: GPUBindGroup, 
-            sceneColorHandle: ResourceHandle, 
-            albedoHandle: ResourceHandle,
-            normalHandle: ResourceHandle,
-            specularHandle: ResourceHandle,
-            depthHandle: ResourceHandle,
-            hizHandle: ResourceHandle,
-            canvasHandle: ResourceHandle) {
-        
-        let ssrHitHandle = graph.createTexture("SSR_Hit", { format: "rgba16float", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-
-        if (enabled) {
-            graph.addPass("SSR Generate")
-                .readTexture(hizHandle)
-                .readTexture(normalHandle)
-                .readTexture(specularHandle)
-                .readTexture(depthHandle)
-                .writeTexture(ssrHitHandle)
-                .execute((encoder, pass) => {
-                    const ssrBindGroup = renderer.device.createBindGroup({
-                        label: "ssr params",
-                        layout: this.ssrPipeline.getBindGroupLayout(1),
-                        entries: [
-                            { binding: 0, resource: pass.getTextureView(hizHandle) },
-                            { binding: 1, resource: pass.getTextureView(normalHandle) },
-                            { binding: 2, resource: pass.getTextureView(specularHandle) },
-                            { binding: 3, resource: pass.getTextureView(depthHandle) },
-                            { binding: 4, resource: { buffer: this.deps.ssrUniformsBuffer } },
-                        ]
-                    });
-
-                    const ssrPass = encoder.beginRenderPass({
-                        label: "SSR pass",
-                        colorAttachments: [{
-                            view: pass.getTextureView(ssrHitHandle), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"
-                        }]
-                    });
-                    ssrPass.setPipeline(this.ssrPipeline);
-                    ssrPass.setBindGroup(0, cameraBindGroup);
-                    ssrPass.setBindGroup(1, ssrBindGroup);
-                    ssrPass.draw(3);
-                    ssrPass.end();
-                });
-        } else {
-            graph.addPass("SSR Clear")
-                .writeTexture(ssrHitHandle)
-                .execute((encoder, pass) => {
-                    const ssrPass = encoder.beginRenderPass({
-                        label: "SSR pass",
-                        colorAttachments: [{
-                            view: pass.getTextureView(ssrHitHandle), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"
-                        }]
-                    });
-                    ssrPass.end();
-                });
+    addToGraph(graph: RenderGraph, enabled: boolean, cameraBindGroup: GPUBindGroup, sceneColorHandle: ResourceHandle, albedoHandle: ResourceHandle, normalHandle: ResourceHandle, specularHandle: ResourceHandle, depthHandle: ResourceHandle, hizHandle: ResourceHandle, canvasHandle: ResourceHandle): void {
+        if (!enabled) {
+            return;
         }
+
+        const ssrHitHandle = graph.createTexture("SSR_Hit", {
+            format: "rgba16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+        });
+
+        graph.addPass("SSR Generate")
+            .readTexture(sceneColorHandle)
+            .readTexture(depthHandle)
+            .readTexture(albedoHandle)
+            .readTexture(normalHandle)
+            .readTexture(specularHandle)
+            .readTexture(hizHandle)
+            .writeTexture(ssrHitHandle)
+            .execute((encoder, pass) => {
+                const ssrBindGroup = renderer.device.createBindGroup({
+                    label: "ssr main bgl",
+                    layout: this.ssrPipeline.getBindGroupLayout(1),
+                    entries: [
+                        { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
+                        { binding: 1, resource: pass.getTextureView(depthHandle) },
+                        { binding: 2, resource: pass.getTextureView(normalHandle) },
+                        { binding: 3, resource: pass.getTextureView(specularHandle) },
+                        { binding: 4, resource: pass.getTextureView(hizHandle) },
+                        { binding: 5, resource: { buffer: this.deps.ssrUniformsBuffer } }
+                    ]
+                });
+
+                const ssrPass = encoder.beginRenderPass({
+                    label: "SSR Generate pass",
+                    colorAttachments: [{
+                        view: pass.getTextureView(ssrHitHandle), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"
+                    }]
+                });
+                ssrPass.setPipeline(this.ssrPipeline);
+                ssrPass.setBindGroup(0, cameraBindGroup);
+                ssrPass.setBindGroup(1, ssrBindGroup);
+                ssrPass.draw(3);
+                ssrPass.end();
+            });
 
         graph.addPass("SSR Composite")
             .readTexture(sceneColorHandle)

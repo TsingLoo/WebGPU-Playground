@@ -335,8 +335,9 @@ fn calculateShadowVSM(
 
     shadow /= totalWeight;
 
-    // If sun is disabled or position is outside all clipmap levels, return fully lit
-    let valid = select(0.0, 1.0, sun.color.a >= 0.5 && level < vsm.clipmap_count);
+    // If sun is disabled OR VSM is disabled, return fully lit
+    let vsmEnabled = sun.shadow_params.w > 0.5;
+    let valid = select(0.0, 1.0, sun.color.a >= 0.5 && vsmEnabled && level < vsm.clipmap_count);
     return mix(1.0, shadow, valid);
 }
 
@@ -348,7 +349,8 @@ fn calculateShadowVSMSimple(
     posWorld: vec3f,
     N: vec3f,
 ) -> f32 {
-    if (sun.color.a < 0.5) { return 1.0; }
+    let vsmEnabled = sun.shadow_params.w > 0.5;
+    if (sun.color.a < 0.5 || !vsmEnabled) { return 1.0; }
 
     let bias = sun.shadow_params.y;
     let biasedPos = posWorld + N * bias;

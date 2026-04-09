@@ -64,6 +64,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     protected stageEnv: import('../stage/environment').Environment;
     protected stage: import('../stage/stage').Stage;
 
+    protected finalBlitPipeline: GPURenderPipeline;
+    protected finalBlitSampler: GPUSampler;
+
     protected sharedRenderGraph = new RenderGraph(); // Persist pool across frames
 
     constructor(stage: Stage) {
@@ -176,6 +179,20 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
 
         this.ddgiDebugPass = new DDGIDebugPass();
+
+        this.finalBlitSampler = renderer.device.createSampler({});
+        const blitBGL = renderer.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+            ]
+        });
+        this.finalBlitPipeline = renderer.device.createRenderPipeline({
+            label: "final blit pipeline",
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [blitBGL] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitFragSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
+        });
     }
     // ==== Template Method Architecture ====
 
@@ -276,12 +293,14 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         const hizHandle = graph.importTexture("HiZ_Import", this.hizPass.hizFullTextureView);
 
         // 3. VSM Shadow Map Pass
-        graph.addPass("Shadow Map")
-            .markRoot()
-            .readTexture(depthHandle)
-            .execute((enc, _pass) => {
-                this.stage.renderShadowMap(enc, this.depthTextureView);
-            });
+        if (this.stage.vsmEnabled) {
+            graph.addPass("Shadow Map")
+                .markRoot()
+                .readTexture(depthHandle)
+                .execute((enc, _pass) => {
+                    this.stage.renderShadowMap(enc, this.depthTextureView);
+                });
+        }
 
         // 4. G-Buffer Pass
         graph.addPass("G-Buffer")
@@ -402,7 +421,34 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                  }
              });
 
-        this.ssrPass.addToGraph(graph, this.stage.ssr.enabled, this.geometryBindGroup, sceneColorHandle, albedoHandle, normalHandle, specularHandle, depthHandle, hizHandle, canvasHandle);
+        if (this.stage.ssr.enabled) {
+            this.ssrPass.addToGraph(graph, this.stage.ssr.enabled, this.geometryBindGroup, sceneColorHandle, albedoHandle, normalHandle, specularHandle, depthHandle, hizHandle, canvasHandle);
+        } else {
+            // Graceful fallback for final output when post processing is omitted
+            graph.addPass("Final Output Blit")
+                .readTexture(sceneColorHandle)
+                .writeTexture(canvasHandle)
+                .execute((enc, pass) => {
+                    const blitPass = enc.beginRenderPass({
+                        label: "Final Blit",
+                        colorAttachments: [{
+                            view: pass.getTextureView(canvasHandle), loadOp: "clear", clearValue: [0,0,0,1], storeOp: "store"
+                        }]
+                    });
+                    blitPass.setPipeline(this.finalBlitPipeline);
+                    // Create a temporary bindgroup for the simple copy
+                    const blitBG = renderer.device.createBindGroup({
+                        layout: this.finalBlitPipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
+                            { binding: 1, resource: this.finalBlitSampler }
+                        ]
+                    });
+                    blitPass.setBindGroup(0, blitBG);
+                    blitPass.draw(3);
+                    blitPass.end();
+                });
+        }
 
         // 12. Volumetric lighting
         if (this.stage.sunVolumetricEnabled) {
