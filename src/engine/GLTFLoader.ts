@@ -476,7 +476,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         }
 
         // Resize images for baseColor texture array directly into GPUTextures
-        const TEX_ARRAY_SIZE = 256;
+        const TEX_ARRAY_SIZE = 1024;
         let baseColorImages: GPUTexture[] = [];
         
         if (gltfWithBuffers.images) {
@@ -485,7 +485,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 const resized = await createImageBitmap(srcBitmap, {
                     resizeWidth: TEX_ARRAY_SIZE,
                     resizeHeight: TEX_ARRAY_SIZE,
-                    resizeQuality: 'medium',
+                    resizeQuality: 'high',
                 });
                 
                 const tempTex = device.createTexture({
@@ -512,7 +512,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
             for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
                 const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
                 const resized = await createImageBitmap(srcBitmap, {
-                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'medium',
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
                 });
                 const tempTex = device.createTexture({
                     size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',
@@ -530,7 +530,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
             for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
                 const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
                 const resized = await createImageBitmap(srcBitmap, {
-                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'medium',
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
                 });
                 const tempTex = device.createTexture({
                     size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',

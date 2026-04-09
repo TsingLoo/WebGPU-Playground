@@ -153,6 +153,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh nodes
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh pos
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh indices
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // materials
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color_tex
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
             ]
         });
 
@@ -196,6 +200,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh nodes
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh pos
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh indices
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // materials
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color_tex
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
             ]
         });
 
@@ -385,7 +393,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         // ---- Bounce Loop ----
         for (let bounce = 0; bounce < this.config.maxBounces; bounce++) {
 
-            // Pass 1: Intersect
+            // Pass 1: Intersect (with alpha-cutout transparency)
             {
                 const bg = dev.createBindGroup({
                     layout: this.intersectLayout,
@@ -396,6 +404,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
                         { binding: 4, resource: { buffer: bvhData.positionBuffer } },
                         { binding: 5, resource: { buffer: bvhData.indexBuffer } },
+                        { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
+                        { binding: 7, resource: scene.baseColorTexArrayView },
+                        { binding: 8, resource: baseColorSampler },
+                        { binding: 9, resource: { buffer: bvhData.uvBuffer } },
                     ]
                 });
                 const pass = encoder.beginComputePass({ label: `WPT Intersect b${bounce}` });
@@ -446,7 +458,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.end();
             }
 
-            // Pass 3: Shadow Test
+            // Pass 3: Shadow Test (with alpha-cutout transparency)
             {
                 const bg = dev.createBindGroup({
                     layout: this.shadowTestLayout,
@@ -457,6 +469,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
                         { binding: 4, resource: { buffer: bvhData.positionBuffer } },
                         { binding: 5, resource: { buffer: bvhData.indexBuffer } },
+                        { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
+                        { binding: 7, resource: scene.baseColorTexArrayView },
+                        { binding: 8, resource: baseColorSampler },
+                        { binding: 9, resource: { buffer: bvhData.uvBuffer } },
                     ]
                 });
                 const pass = encoder.beginComputePass({ label: `WPT Shadow b${bounce}` });
