@@ -30,9 +30,24 @@ export async function initWebGPU() {
 
     if (!navigator.gpu)
     {
-        let errorMessageElement = document.createElement("h1");
-        errorMessageElement.textContent = "This browser doesn't support WebGPU! Try using Google Chrome.";
-        errorMessageElement.style.paddingLeft = '0.4em';
+        let errorMessageElement = document.createElement("div");
+        errorMessageElement.style.padding = '1em';
+        let mainMessage = document.createElement("h1");
+        mainMessage.textContent = "This browser doesn't support WebGPU!";
+        errorMessageElement.appendChild(mainMessage);
+        
+        const isLinux = navigator.userAgent.toLowerCase().includes("linux");
+        const isChrome = navigator.userAgent.toLowerCase().includes("chrome");
+        if (isLinux && isChrome) {
+            let linuxMessage = document.createElement("p");
+            linuxMessage.innerHTML = "It looks like you are using Chrome on Linux. WebGPU is not enabled by default on Linux Chrome.<br>To enable it, please run Chrome with the following flags or enable them in <code>chrome://flags</code>:<br><br><code>--enable-unsafe-webgpu --enable-features=Vulkan</code>";
+            errorMessageElement.appendChild(linuxMessage);
+        } else {
+            let otherMessage = document.createElement("p");
+            otherMessage.textContent = "Try using a browser that supports WebGPU, like the latest Google Chrome on Windows/macOS.";
+            errorMessageElement.appendChild(otherMessage);
+        }
+
         document.body.innerHTML = '';
         document.body.appendChild(errorMessageElement);
         throw new Error("WebGPU not supported on this browser");
@@ -41,6 +56,25 @@ export async function initWebGPU() {
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter)
     {
+        let errorMessageElement = document.createElement("div");
+        errorMessageElement.style.padding = '1em';
+        let mainMessage = document.createElement("h1");
+        mainMessage.textContent = "WebGPU is enabled, but no appropriate GPUAdapter was found!";
+        errorMessageElement.appendChild(mainMessage);
+        
+        const isLinux = navigator.userAgent.toLowerCase().includes("linux");
+        const isChrome = navigator.userAgent.toLowerCase().includes("chrome");
+        
+        let detailsMessage = document.createElement("p");
+        if (isLinux && isChrome) {
+            detailsMessage.innerHTML = "On Linux, this usually means Chrome could not initialize the Vulkan backend.<br><br><b>Troubleshooting steps:</b><br>1. Check <code>chrome://gpu</code> to see if Vulkan or WebGPU backend initialization failed.<br>2. Ensure your graphics drivers and Vulkan (e.g., install <code>mesa-vulkan-drivers</code> or run <code>vulkaninfo</code>) are correctly installed.<br>3. Sometimes Chrome's sandbox blocks Vulkan access on Linux. For testing purposes only, you can try launching Chrome with <code>--disable-gpu-sandbox</code>.";
+        } else {
+            detailsMessage.innerHTML = "This may mean your system's GPU doesn't support WebGPU, or your graphics drivers need to be updated. Check <code>chrome://gpu</code> for more information.";
+        }
+        errorMessageElement.appendChild(detailsMessage);
+
+        document.body.innerHTML = '';
+        document.body.appendChild(errorMessageElement);
         throw new Error("no appropriate GPUAdapter found");
     }
 
