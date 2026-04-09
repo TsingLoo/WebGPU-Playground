@@ -1,17 +1,10 @@
 import * as renderer from '../renderer';
-import { RenderTexManager, RenderResource, BindGroupCache } from '../engine/RenderTexManager';
+import { RenderGraph } from '../engine/RenderGraph';
+import { GBufferHandles, BaseSceneRenderer } from './base_scene_renderer';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
-import { BaseSceneRenderer } from './base_scene_renderer';
 
 export class ClusteredDeferredRenderer extends BaseSceneRenderer {
-    get shadingOutputDeviceTextureView() {
-        return RenderTexManager.getTextureView(RenderResource.ShadingOutput, {
-            format: "rgba16float",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
-        });
-    }
-
     shadingStaticBindGroupLayout: GPUBindGroupLayout;
 
     giDynamicBindGroupLayout: GPUBindGroupLayout;
@@ -149,73 +142,95 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
         }
     }
 
-    protected override executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {
-        const shadingBG = BindGroupCache.get({
-            label: "shading static bind group",
-            layout: this.shadingStaticBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
-                { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
-                { binding: 2, resource: { buffer: this.tileOffsetsDeviceBuffer }},
-                { binding: 3, resource: { buffer: this.globalLightIndicesDeviceBuffer }},
-                { binding: 4, resource: { buffer: this.clusterSetDeviceBuffer }},
-                { binding: 5, resource: this.gBufferAlbedoTextureView },
-                { binding: 6, resource: this.gBufferNormalTextureView },
-                { binding: 7, resource: this.gBufferPositionTextureView },
-                { binding: 8, resource: this.gBufferSpecularTextureView },
-                { binding: 9, resource: this.depthTextureView},
-                { binding: 10, resource: this.shadingOutputDeviceTextureView },
-                { binding: 11, resource: this.stageEnv.irradianceMapView },
-                { binding: 12, resource: this.stageEnv.prefilteredMapView },
-                { binding: 13, resource: this.stageEnv.brdfLutView },
-                { binding: 14, resource: this.stageEnv.envSampler },
-                { binding: 15, resource: { buffer: this.stage.sunLightBuffer } },
-                { binding: 16, resource: this.stage.vsm.physicalAtlasView },
-                { binding: 17, resource: { buffer: this.stage.vsm.pageTableBuffer } },
-                { binding: 18, resource: { buffer: this.stage.vsm.vsmUniformBuffer } },
-                { binding: 19, resource: this.dummyTextureView },
-                { binding: 20, resource: { buffer: this.dummyBuffer } },
-                { binding: 21, resource: this.dummyTextureView },
-                { binding: 22, resource: { buffer: this.dummyBuffer } },
-                { binding: 23, resource: this.ssaoPass.blurredTextureView },
-            ]
+    protected override addToGraphShading(graph: RenderGraph, handles: GBufferHandles) {
+        const shadingOutputHandle = graph.createTexture("ShadingOutput", {
+            format: "rgba16float",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING
         });
 
-        // Deferred shading compute pass
-        const shadingComputePass = encoder.beginComputePass();
-        shadingComputePass.setPipeline(this.shadingComputePipeline);
-        shadingComputePass.setBindGroup(0, shadingBG);
-        shadingComputePass.setBindGroup(1, this.giDynamicBindGroup);
-        
-        const workgroupsX = Math.max(1, Math.ceil(renderer.canvas.width / 8));
-        const workgroupsY = Math.max(1, Math.ceil(renderer.canvas.height / 8));
-        shadingComputePass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-        shadingComputePass.end();
+        graph.addPass("Deferred Compute Execution")
+            .readTexture(handles.albedo)
+            .readTexture(handles.normal)
+            .readTexture(handles.position)
+            .readTexture(handles.specular)
+            .readTexture(handles.depth)
+            .readTexture(handles.ssao)
+            .writeTexture(shadingOutputHandle)
+            .execute((encoder, pass) => {
+                this.createShadingBindGroup();
+                
+                const shadingBG = renderer.device.createBindGroup({
+                    label: "shading static bind group",
+                    layout: this.shadingStaticBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
+                        { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
+                        { binding: 2, resource: { buffer: this.tileOffsetsDeviceBuffer }},
+                        { binding: 3, resource: { buffer: this.globalLightIndicesDeviceBuffer }},
+                        { binding: 4, resource: { buffer: this.clusterSetDeviceBuffer }},
+                        { binding: 5, resource: pass.getTextureView(handles.albedo) },
+                        { binding: 6, resource: pass.getTextureView(handles.normal) },
+                        { binding: 7, resource: pass.getTextureView(handles.position) },
+                        { binding: 8, resource: pass.getTextureView(handles.specular) },
+                        { binding: 9, resource: pass.getTextureView(handles.depth) },
+                        { binding: 10, resource: pass.getTextureView(shadingOutputHandle) },
+                        { binding: 11, resource: this.stageEnv.irradianceMapView },
+                        { binding: 12, resource: this.stageEnv.prefilteredMapView },
+                        { binding: 13, resource: this.stageEnv.brdfLutView },
+                        { binding: 14, resource: this.stageEnv.envSampler },
+                        { binding: 15, resource: { buffer: this.stage.sunLightBuffer } },
+                        { binding: 16, resource: this.stage.vsm.physicalAtlasView },
+                        { binding: 17, resource: { buffer: this.stage.vsm.pageTableBuffer } },
+                        { binding: 18, resource: { buffer: this.stage.vsm.vsmUniformBuffer } },
+                        { binding: 19, resource: this.dummyTextureView },
+                        { binding: 20, resource: { buffer: this.dummyBuffer } },
+                        { binding: 21, resource: this.dummyTextureView },
+                        { binding: 22, resource: { buffer: this.dummyBuffer } },
+                        { binding: 23, resource: pass.getTextureView(handles.ssao) },
+                    ]
+                });
 
-        const blitBG = BindGroupCache.get({
-            label: "blit bind group",
-            layout: this.blitBindGroupLayout,
-            entries: [
-                { binding: 0, resource: this.shadingOutputDeviceTextureView },
-                { binding: 1, resource: this.blitSampler }
-            ]
-        });
+                // Deferred shading compute pass
+                const shadingComputePass = encoder.beginComputePass();
+                shadingComputePass.setPipeline(this.shadingComputePipeline);
+                shadingComputePass.setBindGroup(0, shadingBG);
+                shadingComputePass.setBindGroup(1, this.giDynamicBindGroup);
+                
+                const workgroupsX = Math.max(1, Math.ceil(renderer.canvas.width / 8));
+                const workgroupsY = Math.max(1, Math.ceil(renderer.canvas.height / 8));
+                shadingComputePass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+                shadingComputePass.end();
+            });
 
-        // Blit pass (no depth needed — fullscreen quad)
-        const blitPass = encoder.beginRenderPass({
-            label: "Blit Pass",
-            colorAttachments: [
-                {
-                    view: canvasTextureView,
-                    clearValue: [0, 0, 0, 1],
-                    loadOp: "clear",
-                    storeOp: "store"
-                }
-            ]
-        });
-        blitPass.setPipeline(this.blitPipeline);
-        blitPass.setBindGroup(0, blitBG);
-        blitPass.draw(3);
-        blitPass.end();
+        graph.addPass("Deferred Blit")
+            .readTexture(shadingOutputHandle)
+            .writeTexture(handles.sceneColor)
+            .execute((encoder, pass) => {
+                const blitBG = renderer.device.createBindGroup({
+                    label: "blit bind group",
+                    layout: this.blitBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: pass.getTextureView(shadingOutputHandle) },
+                        { binding: 1, resource: this.blitSampler }
+                    ]
+                });
+
+                // Blit pass (no depth needed — fullscreen quad)
+                const blitPass = encoder.beginRenderPass({
+                    label: "Blit Pass",
+                    colorAttachments: [
+                        {
+                            view: pass.getTextureView(handles.sceneColor),
+                            clearValue: [0, 0, 0, 1],
+                            loadOp: "clear",
+                            storeOp: "store"
+                        }
+                    ]
+                });
+                blitPass.setPipeline(this.blitPipeline);
+                blitPass.setBindGroup(0, blitBG);
+                blitPass.draw(3);
+                blitPass.end();
+            });
     }
 }

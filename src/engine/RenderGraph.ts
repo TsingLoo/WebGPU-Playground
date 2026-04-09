@@ -36,7 +36,7 @@ export interface PassResolver {
 }
 
 export class PassBuilder {
-    constructor(private graph: RenderGraph, private passParams: RenderPassData) {}
+    constructor(private passParams: RenderPassData) {}
 
     readTexture(handle: ResourceHandle): PassBuilder {
         this.passParams.reads.set(handle, true);
@@ -85,7 +85,7 @@ export class RenderGraph implements PassResolver {
     public addPass(name: string): PassBuilder {
         const pass = new RenderPassData(name);
         this.passes.push(pass);
-        return new PassBuilder(this, pass);
+        return new PassBuilder(pass);
     }
 
     // PassResolver implementation
