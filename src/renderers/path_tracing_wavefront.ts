@@ -28,6 +28,7 @@ import { Stage } from '../stage/stage';
 import { Renderer } from '../renderer';
 import { pipelineCache } from '../engine/PipelineCache';
 import { NRC } from '../stage/nrc';
+import { RenderGraph, ResourceHandle } from '../engine/RenderGraph';
 
 // ============================================================
 // PTUniforms layout (matches pt_common.wgsl PTUniforms struct)
@@ -47,6 +48,7 @@ interface PTConfig {
 
 export class WavefrontPathTracingRenderer extends Renderer {
 
+    protected sharedRenderGraph = new RenderGraph();
     // ------------ Configuration ------------
     config: PTConfig = {
         maxBounces: 4,
@@ -65,22 +67,15 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private lastCameraPos: [number, number, number] = [0, 0, 0];
     private lastCameraFront: [number, number, number] = [0, 0, -1];
 
-    // ------------ GPU Buffers ------------
-    private rayBuffer!: GPUBuffer;
-    private hitBuffer!: GPUBuffer;
-    private shadowBuffer!: GPUBuffer;
-    private accumWorkBuffer!: GPUBuffer;  // Per-pixel radiance sum (cleared each frame)
+    // ------------ Persistent GPU Buffers ------------
     private sampleSumBuffer!: GPUBuffer;  // Persistent sum across all samples
     private ptUniformBuffer!: GPUBuffer;  // PTUniforms (32 bytes)
     private ptNRCTrainDataBuffer!: GPUBuffer; // Array of NRCWavefrontTrainData
 
     // ------------ ReSTIR GPU Buffers ------------
-    private reservoirBufferA!: GPUBuffer; // Current frame reservoir
-    private reservoirBufferB!: GPUBuffer; // Ping-pong / spatial output
     private prevReservoirBuffer!: GPUBuffer; // Previous frame reservoir
     private restirUniformBuffer!: GPUBuffer; // ReSTIRUniforms (32 bytes)
     private prevCameraBuffer!: GPUBuffer;    // Previous frame camera uniforms
-    private pixelDataBuffer!: GPUBuffer;     // Current frame normal+depth per pixel (vec4f)
     private prevPixelDataBuffer!: GPUBuffer; // Previous frame normal+depth per pixel
 
     private renderWidth!: number;
@@ -147,14 +142,6 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
         const storageUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 
-        // Ray buffer: 64 bytes per pixel
-        this.rayBuffer = dev.createBuffer({ label: 'PT Ray Buffer',    size: this.totalPixels * 64, usage: storageUsage });
-        // Hit buffer: 48 bytes per pixel (compact: bary + vertex indices)
-        this.hitBuffer = dev.createBuffer({ label: 'PT Hit Buffer',    size: this.totalPixels * 48, usage: storageUsage });
-        // Shadow ray buffer: 48 bytes per pixel
-        this.shadowBuffer = dev.createBuffer({ label: 'PT Shadow Buf', size: this.totalPixels * 48, usage: storageUsage });
-        // Per-frame radiance accumulator (cleared after each frame)
-        this.accumWorkBuffer = dev.createBuffer({ label: 'PT Accum Work', size: this.totalPixels * 16, usage: storageUsage });
         // Persistent sum across all frames (NOT cleared unless resetAccumulation() is called)
         this.sampleSumBuffer = dev.createBuffer({ label: 'PT Sample Sum',  size: this.totalPixels * 16, usage: storageUsage });
 
@@ -176,24 +163,13 @@ export class WavefrontPathTracingRenderer extends Renderer {
         // ReSTIR Buffers
         // ============================================================
         const reservoirSize = this.totalPixels * 64; // Reservoir = 64 bytes per pixel
-        console.log(`[ReSTIR] Allocating reservoir buffers: ${(reservoirSize / (1024*1024)).toFixed(2)} MB each`);
 
-        this.reservoirBufferA = dev.createBuffer({
-            label: 'ReSTIR Reservoir A',
-            size: reservoirSize,
-            usage: storageUsage,
-        });
-        this.reservoirBufferB = dev.createBuffer({
-            label: 'ReSTIR Reservoir B',
-            size: reservoirSize,
-            usage: storageUsage,
-        });
         this.prevReservoirBuffer = dev.createBuffer({
             label: 'ReSTIR Prev Reservoir',
             size: reservoirSize,
             usage: storageUsage,
         });
-        console.log('[ReSTIR] Reservoir buffers created (A, B, Prev)');
+        console.log('[ReSTIR] History Reservoir buffer created');
 
         // ReSTIR uniforms: 32 bytes (8 × u32)
         this.restirUniformBuffer = dev.createBuffer({
@@ -213,17 +189,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
         // Per-pixel data: vec4f(normal.xyz, linear_depth) — 16 bytes per pixel
         const pixelDataSize = this.totalPixels * 16;
-        this.pixelDataBuffer = dev.createBuffer({
-            label: 'ReSTIR Pixel Data',
-            size: pixelDataSize,
-            usage: storageUsage,
-        });
         this.prevPixelDataBuffer = dev.createBuffer({
             label: 'ReSTIR Prev Pixel Data',
             size: pixelDataSize,
             usage: storageUsage,
         });
-        console.log(`[ReSTIR] Pixel data buffers created: ${(pixelDataSize / (1024*1024)).toFixed(2)} MB each`);
+        console.log(`[ReSTIR] Pixel data history buffer created`);
 
         this.uploadPTUniforms();
         this.uploadReSTIRUniforms();
@@ -507,7 +478,6 @@ export class WavefrontPathTracingRenderer extends Renderer {
     resetAccumulation() {
         this.sampleCount = 0;
         const zeros = new Float32Array(this.totalPixels * 4);
-        renderer.device.queue.writeBuffer(this.accumWorkBuffer,  0, zeros);
         renderer.device.queue.writeBuffer(this.sampleSumBuffer, 0, zeros);
         console.log('[WPT] Accumulation reset');
     }
@@ -570,6 +540,27 @@ export class WavefrontPathTracingRenderer extends Renderer {
         const bvhData = scene.bvhData;
         const encoder = dev.createCommandEncoder({ label: 'WPT Frame' });
 
+        const graph = this.sharedRenderGraph;
+
+        // ---- Transient Buffers ----
+        const rayHandle = graph.createBuffer("RayBuffer", { size: this.totalPixels * 64, usage: GPUBufferUsage.STORAGE });
+        const hitHandle = graph.createBuffer("HitBuffer", { size: this.totalPixels * 48, usage: GPUBufferUsage.STORAGE });
+        const shadowHandle = graph.createBuffer("ShadowBuffer", { size: this.totalPixels * 48, usage: GPUBufferUsage.STORAGE });
+        const accumHandle = graph.createBuffer("AccumWorkBuffer", { size: this.totalPixels * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        const resAHandle = graph.createBuffer("ReservoirA", { size: this.totalPixels * 64, usage: GPUBufferUsage.STORAGE });
+        const resBHandle = graph.createBuffer("ReservoirB", { size: this.totalPixels * 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        const pixelDataHandle = graph.createBuffer("PixelData", { size: this.totalPixels * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+
+        // ---- Persistent Buffers ----
+        const ptUniformHandle = graph.importBuffer("PTUniforms", this.ptUniformBuffer);
+        const restirUniformHandle = graph.importBuffer("ReSTIRUniforms", this.restirUniformBuffer);
+        const sampleSumHandle = graph.importBuffer("SampleSumBuffer", this.sampleSumBuffer);
+        const ptNRCTrainDataHandle = graph.importBuffer("PTNRCTrainData", this.ptNRCTrainDataBuffer);
+        
+        let prevResHandle = graph.importBuffer("PrevReservoir", this.prevReservoirBuffer);
+        let prevPixelDataHandle = graph.importBuffer("PrevPixelData", this.prevPixelDataBuffer);
+        const prevCameraHandle = graph.importBuffer("PrevCamera", this.prevCameraBuffer);
+
         const rW  = Math.ceil(this.renderWidth  / 8);
         const rH  = Math.ceil(this.renderHeight / 8);
         const r1D = Math.ceil(this.totalPixels  / 64);
@@ -579,333 +570,417 @@ export class WavefrontPathTracingRenderer extends Renderer {
             addressModeU: 'repeat', addressModeV: 'repeat'
         });
 
+        graph.addGenericPass('Clear Accum Work')
+            .markRoot()
+            .writeBuffer(accumHandle)
+            .execute((enc, pass) => {
+                enc.clearBuffer(pass.getBuffer(accumHandle));
+            });
+
         // Initialize NRC states
         if (this.stage.nrc.enabled) {
-            this.stage.nrc.updateUniforms(); // ensures params are ready
-            // Reset the sample counter
-            encoder.copyBufferToBuffer(
-                this.stage.nrc.sampleCounterZeroBuffer, 0,
-                this.stage.nrc.sampleCounterBuffer, 0,
-                4
-            );
+            graph.addGenericPass('Reset NRC Counters')
+                .markRoot()
+                .execute((enc, _pass) => {
+                    this.stage.nrc.updateUniforms(); // ensures params are ready
+                    enc.copyBufferToBuffer(
+                        this.stage.nrc.sampleCounterZeroBuffer, 0,
+                        this.stage.nrc.sampleCounterBuffer, 0,
+                        4
+                    );
+                });
         }
 
         // ---- Pass 0: Primary Ray Generation ----
-        {
-            const bg = dev.createBindGroup({
-                layout: this.rayGenLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                    { binding: 1, resource: { buffer: this.ptUniformBuffer } },
-                    { binding: 2, resource: { buffer: this.rayBuffer } },
-                ]
+        graph.addComputePass('WPT RayGen')
+            .readBuffer(ptUniformHandle)
+            .writeBuffer(rayHandle)
+            .execute((computePass, pass) => {
+                const bg = dev.createBindGroup({
+                    layout: this.rayGenLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
+                        { binding: 1, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                        { binding: 2, resource: { buffer: pass.getBuffer(rayHandle) } },
+                    ]
+                });
+                computePass.setPipeline(this.rayGenPipeline);
+                computePass.setBindGroup(0, bg);
+                computePass.dispatchWorkgroups(rW, rH, 1);
             });
-            const pass = encoder.beginComputePass({ label: 'WPT RayGen' });
-            pass.setPipeline(this.rayGenPipeline);
-            pass.setBindGroup(0, bg);
-            pass.dispatchWorkgroups(rW, rH, 1);
-            pass.end();
-        }
 
         // ---- Bounce Loop ----
         for (let bounce = 0; bounce < this.config.maxBounces; bounce++) {
 
             // Pass 1: Intersect (with alpha-cutout transparency)
-            {
-                const bg = dev.createBindGroup({
-                    layout: this.intersectLayout,
-                    entries: [
-                        { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                        { binding: 1, resource: { buffer: this.rayBuffer } },
-                        { binding: 2, resource: { buffer: this.hitBuffer } },
-                        { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
-                        { binding: 4, resource: { buffer: bvhData.positionBuffer } },
-                        { binding: 5, resource: { buffer: bvhData.indexBuffer } },
-                        { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
-                        { binding: 7, resource: scene.baseColorTexArrayView },
-                        { binding: 8, resource: baseColorSampler },
-                        { binding: 9, resource: { buffer: bvhData.uvBuffer } },
-                    ]
+            graph.addComputePass(`WPT Intersect b${bounce}`)
+                .readBuffer(ptUniformHandle)
+                .readBuffer(rayHandle)
+                .writeBuffer(hitHandle)
+                .execute((computePass, pass) => {
+                    const bg = dev.createBindGroup({
+                        layout: this.intersectLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(rayHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(hitHandle) } },
+                            { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
+                            { binding: 4, resource: { buffer: bvhData.positionBuffer } },
+                            { binding: 5, resource: { buffer: bvhData.indexBuffer } },
+                            { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 7, resource: scene.baseColorTexArrayView },
+                            { binding: 8, resource: baseColorSampler },
+                            { binding: 9, resource: { buffer: bvhData.uvBuffer } },
+                        ]
+                    });
+                    computePass.setPipeline(this.intersectPipeline);
+                    computePass.setBindGroup(0, bg);
+                    computePass.dispatchWorkgroups(r1D, 1, 1);
                 });
-                const pass = encoder.beginComputePass({ label: `WPT Intersect b${bounce}` });
-                pass.setPipeline(this.intersectPipeline);
-                pass.setBindGroup(0, bg);
-                pass.dispatchWorkgroups(r1D, 1, 1);
-                pass.end();
-            }
 
             // Pass 2: Shade + NEE (NEE skipped for bounce 0 when ReSTIR active)
-            {
-                const bg = dev.createBindGroup({
-                    layout: this.shadeLayout,
-                    entries: [
-                        { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
-                        { binding: 1, resource: { buffer: this.ptUniformBuffer } },
-                        { binding: 2, resource: { buffer: this.rayBuffer } },
-                        { binding: 3, resource: { buffer: this.hitBuffer } },
-                        { binding: 4, resource: { buffer: this.shadowBuffer } },
-                        { binding: 5, resource: { buffer: this.accumWorkBuffer } },
-                        { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
-                        { binding: 7, resource: { buffer: this.stage.sunLightBuffer } },
-                        { binding: 8, resource: scene.baseColorTexArrayView },
-                        { binding: 9, resource: baseColorSampler },
-                        { binding: 10, resource: scene.normalMapTexArrayView },
-                        { binding: 11, resource: scene.mrTexArrayView },
-                        { binding: 12, resource: { buffer: bvhData.uvBuffer } },
-                        { binding: 13, resource: { buffer: bvhData.normalBuffer } },
-                        { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
-                    ]
-                });
-                
-                const nrcBg = dev.createBindGroup({
-                    layout: this.shadeNRCLayout,
-                    entries: [
-                        { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
-                        { binding: 1, resource: { buffer: this.stage.nrc.weightsBuffer } },
-                        { binding: 2, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
-                        { binding: 3, resource: { buffer: this.ptNRCTrainDataBuffer } },
-                    ]
-                });
+            graph.addComputePass(`WPT Shade b${bounce}`)
+                .readBuffer(ptUniformHandle)
+                .readBuffer(rayHandle)
+                .writeBuffer(rayHandle) // Read/Write
+                .readBuffer(hitHandle)
+                .writeBuffer(shadowHandle)
+                .readBuffer(accumHandle)
+                .writeBuffer(accumHandle) // Read/Write
+                .execute((computePass, pass) => {
+                    const bg = dev.createBindGroup({
+                        layout: this.shadeLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(rayHandle) } },
+                            { binding: 3, resource: { buffer: pass.getBuffer(hitHandle) } },
+                            { binding: 4, resource: { buffer: pass.getBuffer(shadowHandle) } },
+                            { binding: 5, resource: { buffer: pass.getBuffer(accumHandle) } },
+                            { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 7, resource: { buffer: this.stage.sunLightBuffer } },
+                            { binding: 8, resource: scene.baseColorTexArrayView },
+                            { binding: 9, resource: baseColorSampler },
+                            { binding: 10, resource: scene.normalMapTexArrayView },
+                            { binding: 11, resource: scene.mrTexArrayView },
+                            { binding: 12, resource: { buffer: bvhData.uvBuffer } },
+                            { binding: 13, resource: { buffer: bvhData.normalBuffer } },
+                            { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
+                        ]
+                    });
+                    
+                    computePass.setPipeline(this.shadePipeline);
+                    computePass.setBindGroup(0, bg);
 
-                const pass = encoder.beginComputePass({ label: `WPT Shade b${bounce}` });
-                pass.setPipeline(this.shadePipeline);
-                pass.setBindGroup(0, bg);
-                pass.setBindGroup(1, nrcBg);
-                pass.dispatchWorkgroups(r1D, 1, 1);
-                pass.end();
-            }
+                    const nrcBg = dev.createBindGroup({
+                        layout: this.shadeNRCLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
+                            { binding: 1, resource: { buffer: this.stage.nrc.weightsBuffer } },
+                            { binding: 2, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
+                            { binding: 3, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } }, // track via RenderGraph
+                        ]
+                    });
+                    computePass.setBindGroup(1, nrcBg);
+
+                    computePass.dispatchWorkgroups(r1D, 1, 1);
+                });
 
             // ============================================================
             // ReSTIR DI — only at bounce 0
             // ============================================================
             if (bounce === 0 && this.config.restirEnabled) {
                 // Pass A: Initial Candidate Generation (RIS)
-                {
-                    const bg = dev.createBindGroup({
-                        layout: this.restirInitialLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
-                            { binding: 2, resource: { buffer: this.rayBuffer } },
-                            { binding: 3, resource: { buffer: this.hitBuffer } },
-                            { binding: 4, resource: { buffer: scene.globalMaterialBuffer } },
-                            { binding: 5, resource: { buffer: this.stage.sunLightBuffer } },
-                            { binding: 6, resource: { buffer: this.reservoirBufferA } },
-                            { binding: 7, resource: { buffer: bvhData.emissiveIndexBuffer } },
-                            { binding: 8, resource: { buffer: bvhData.positionBuffer } },
-                            { binding: 9, resource: { buffer: bvhData.normalBuffer } },
-                            { binding: 10, resource: { buffer: bvhData.uvBuffer } },
-                            { binding: 11, resource: { buffer: this.pixelDataBuffer } },
-                        ]
+                graph.addComputePass('ReSTIR Initial')
+                    .readBuffer(ptUniformHandle)
+                    .readBuffer(restirUniformHandle)
+                    .readBuffer(rayHandle)
+                    .readBuffer(hitHandle)
+                    .writeBuffer(resAHandle)
+                    .writeBuffer(pixelDataHandle)
+                    .execute((computePass, pass) => {
+                        const bg = dev.createBindGroup({
+                            layout: this.restirInitialLayout,
+                            entries: [
+                                { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                                { binding: 1, resource: { buffer: pass.getBuffer(restirUniformHandle) } },
+                                { binding: 2, resource: { buffer: pass.getBuffer(rayHandle) } },
+                                { binding: 3, resource: { buffer: pass.getBuffer(hitHandle) } },
+                                { binding: 4, resource: { buffer: scene.globalMaterialBuffer } },
+                                { binding: 5, resource: { buffer: this.stage.sunLightBuffer } },
+                                { binding: 6, resource: { buffer: pass.getBuffer(resAHandle) } },
+                                { binding: 7, resource: { buffer: bvhData.emissiveIndexBuffer } },
+                                { binding: 8, resource: { buffer: bvhData.positionBuffer } },
+                                { binding: 9, resource: { buffer: bvhData.normalBuffer } },
+                                { binding: 10, resource: { buffer: bvhData.uvBuffer } },
+                                { binding: 11, resource: { buffer: pass.getBuffer(pixelDataHandle) } },
+                            ]
+                        });
+                        computePass.setPipeline(this.restirInitialPipeline);
+                        computePass.setBindGroup(0, bg);
+                        computePass.dispatchWorkgroups(r1D, 1, 1);
                     });
-                    const pass = encoder.beginComputePass({ label: 'ReSTIR Initial' });
-                    pass.setPipeline(this.restirInitialPipeline);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(r1D, 1, 1);
-                    pass.end();
-                }
 
                 // Pass B: Temporal Resampling
-                {
-                    const bg = dev.createBindGroup({
-                        layout: this.restirTemporalLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
-                            { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
-                            { binding: 3, resource: { buffer: this.prevCameraBuffer } },
-                            { binding: 4, resource: { buffer: this.reservoirBufferA } },
-                            { binding: 5, resource: { buffer: this.prevReservoirBuffer } },
-                            { binding: 6, resource: { buffer: this.hitBuffer } },
-                            { binding: 7, resource: { buffer: bvhData.positionBuffer } },
-                            { binding: 8, resource: { buffer: bvhData.normalBuffer } },
-                            { binding: 9, resource: { buffer: this.prevPixelDataBuffer } },
-                        ]
+                graph.addComputePass('ReSTIR Temporal')
+                    .readBuffer(ptUniformHandle)
+                    .readBuffer(restirUniformHandle)
+                    .readBuffer(prevCameraHandle)
+                    .readBuffer(resAHandle)
+                    .writeBuffer(resAHandle)
+                    .readBuffer(prevResHandle)
+                    .readBuffer(hitHandle)
+                    .readBuffer(prevPixelDataHandle)
+                    .execute((computePass, pass) => {
+                        const bg = dev.createBindGroup({
+                            layout: this.restirTemporalLayout,
+                            entries: [
+                                { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                                { binding: 1, resource: { buffer: pass.getBuffer(restirUniformHandle) } },
+                                { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
+                                { binding: 3, resource: { buffer: pass.getBuffer(prevCameraHandle) } },
+                                { binding: 4, resource: { buffer: pass.getBuffer(resAHandle) } },
+                                { binding: 5, resource: { buffer: pass.getBuffer(prevResHandle) } },
+                                { binding: 6, resource: { buffer: pass.getBuffer(hitHandle) } },
+                                { binding: 7, resource: { buffer: bvhData.positionBuffer } },
+                                { binding: 8, resource: { buffer: bvhData.normalBuffer } },
+                                { binding: 9, resource: { buffer: pass.getBuffer(prevPixelDataHandle) } },
+                            ]
+                        });
+                        computePass.setPipeline(this.restirTemporalPipeline);
+                        computePass.setBindGroup(0, bg);
+                        computePass.dispatchWorkgroups(r1D, 1, 1);
                     });
-                    const pass = encoder.beginComputePass({ label: 'ReSTIR Temporal' });
-                    pass.setPipeline(this.restirTemporalPipeline);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(r1D, 1, 1);
-                    pass.end();
-                }
 
                 // Pass C: Spatial Resampling (A → B)
-                {
-                    const bg = dev.createBindGroup({
-                        layout: this.restirSpatialLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
-                            { binding: 2, resource: { buffer: this.reservoirBufferA } },   // in
-                            { binding: 3, resource: { buffer: this.reservoirBufferB } },   // out
-                            { binding: 4, resource: { buffer: this.hitBuffer } },
-                            { binding: 5, resource: { buffer: bvhData.positionBuffer } },
-                            { binding: 6, resource: { buffer: bvhData.normalBuffer } },
-                            { binding: 7, resource: { buffer: this.pixelDataBuffer } },
-                        ]
+                graph.addComputePass('ReSTIR Spatial')
+                    .readBuffer(ptUniformHandle)
+                    .readBuffer(restirUniformHandle)
+                    .readBuffer(resAHandle)
+                    .writeBuffer(resBHandle)
+                    .readBuffer(hitHandle)
+                    .readBuffer(pixelDataHandle)
+                    .execute((computePass, pass) => {
+                        const bg = dev.createBindGroup({
+                            layout: this.restirSpatialLayout,
+                            entries: [
+                                { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                                { binding: 1, resource: { buffer: pass.getBuffer(restirUniformHandle) } },
+                                { binding: 2, resource: { buffer: pass.getBuffer(resAHandle) } },   // in
+                                { binding: 3, resource: { buffer: pass.getBuffer(resBHandle) } },   // out
+                                { binding: 4, resource: { buffer: pass.getBuffer(hitHandle) } },
+                                { binding: 5, resource: { buffer: bvhData.positionBuffer } },
+                                { binding: 6, resource: { buffer: bvhData.normalBuffer } },
+                                { binding: 7, resource: { buffer: pass.getBuffer(pixelDataHandle) } },
+                            ]
+                        });
+                        computePass.setPipeline(this.restirSpatialPipeline);
+                        computePass.setBindGroup(0, bg);
+                        computePass.dispatchWorkgroups(r1D, 1, 1);
                     });
-                    const pass = encoder.beginComputePass({ label: 'ReSTIR Spatial' });
-                    pass.setPipeline(this.restirSpatialPipeline);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(r1D, 1, 1);
-                    pass.end();
-                }
 
                 // Pass D: ReSTIR Shade → Shadow Ray (reads from B)
-                {
-                    const bg = dev.createBindGroup({
-                        layout: this.restirShadeLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
-                            { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
-                            { binding: 3, resource: { buffer: this.hitBuffer } },
-                            { binding: 4, resource: { buffer: this.reservoirBufferB } },
-                            { binding: 5, resource: { buffer: this.shadowBuffer } },
-                            { binding: 6, resource: { buffer: this.accumWorkBuffer } },
-                            { binding: 7, resource: { buffer: scene.globalMaterialBuffer } },
-                            { binding: 8, resource: scene.baseColorTexArrayView },
-                            { binding: 9, resource: baseColorSampler },
-                            { binding: 10, resource: scene.mrTexArrayView },
-                            { binding: 11, resource: { buffer: bvhData.positionBuffer } },
-                            { binding: 12, resource: { buffer: bvhData.uvBuffer } },
-                            { binding: 13, resource: { buffer: bvhData.normalBuffer } },
-                            { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
-                            { binding: 15, resource: scene.normalMapTexArrayView },
-                            { binding: 16, resource: { buffer: this.pixelDataBuffer } },
-                        ]
+                graph.addComputePass('ReSTIR Shade')
+                    .readBuffer(ptUniformHandle)
+                    .readBuffer(restirUniformHandle)
+                    .readBuffer(hitHandle)
+                    .readBuffer(resBHandle)
+                    .writeBuffer(shadowHandle)
+                    .readBuffer(accumHandle)
+                    .writeBuffer(accumHandle)
+                    .readBuffer(pixelDataHandle)
+                    .execute((computePass, pass) => {
+                        const bg = dev.createBindGroup({
+                            layout: this.restirShadeLayout,
+                            entries: [
+                                { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                                { binding: 1, resource: { buffer: pass.getBuffer(restirUniformHandle) } },
+                                { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
+                                { binding: 3, resource: { buffer: pass.getBuffer(hitHandle) } },
+                                { binding: 4, resource: { buffer: pass.getBuffer(resBHandle) } },
+                                { binding: 5, resource: { buffer: pass.getBuffer(shadowHandle) } },
+                                { binding: 6, resource: { buffer: pass.getBuffer(accumHandle) } },
+                                { binding: 7, resource: { buffer: scene.globalMaterialBuffer } },
+                                { binding: 8, resource: scene.baseColorTexArrayView },
+                                { binding: 9, resource: baseColorSampler },
+                                { binding: 10, resource: scene.mrTexArrayView },
+                                { binding: 11, resource: { buffer: bvhData.positionBuffer } },
+                                { binding: 12, resource: { buffer: bvhData.uvBuffer } },
+                                { binding: 13, resource: { buffer: bvhData.normalBuffer } },
+                                { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
+                                { binding: 15, resource: scene.normalMapTexArrayView },
+                                { binding: 16, resource: { buffer: pass.getBuffer(pixelDataHandle) } },
+                            ]
+                        });
+                        computePass.setPipeline(this.restirShadePipeline);
+                        computePass.setBindGroup(0, bg);
+                        computePass.dispatchWorkgroups(r1D, 1, 1);
                     });
-                    const pass = encoder.beginComputePass({ label: 'ReSTIR Shade' });
-                    pass.setPipeline(this.restirShadePipeline);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(r1D, 1, 1);
-                    pass.end();
-                }
             }
 
             // Pass 3: Shadow Test (with alpha-cutout transparency)
-            {
-                const bg = dev.createBindGroup({
-                    layout: this.shadowTestLayout,
-                    entries: [
-                        { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                        { binding: 1, resource: { buffer: this.shadowBuffer } },
-                        { binding: 2, resource: { buffer: this.accumWorkBuffer } },
-                        { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
-                        { binding: 4, resource: { buffer: bvhData.positionBuffer } },
-                        { binding: 5, resource: { buffer: bvhData.indexBuffer } },
-                        { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
-                        { binding: 7, resource: scene.baseColorTexArrayView },
-                        { binding: 8, resource: baseColorSampler },
-                        { binding: 9, resource: { buffer: bvhData.uvBuffer } },
-                    ]
+            graph.addComputePass(`WPT Shadow b${bounce}`)
+                .readBuffer(ptUniformHandle)
+                .readBuffer(shadowHandle)
+                .readBuffer(accumHandle)
+                .writeBuffer(accumHandle) // Read/Write
+                .execute((computePass, pass) => {
+                    const bg = dev.createBindGroup({
+                        layout: this.shadowTestLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(shadowHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(accumHandle) } },
+                            { binding: 3, resource: { buffer: bvhData.nodeBuffer } },
+                            { binding: 4, resource: { buffer: bvhData.positionBuffer } },
+                            { binding: 5, resource: { buffer: bvhData.indexBuffer } },
+                            { binding: 6, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 7, resource: scene.baseColorTexArrayView },
+                            { binding: 8, resource: baseColorSampler },
+                            { binding: 9, resource: { buffer: bvhData.uvBuffer } },
+                        ]
+                    });
+                    computePass.setPipeline(this.shadowTestPipeline);
+                    computePass.setBindGroup(0, bg);
+                    computePass.dispatchWorkgroups(r1D, 1, 1);
                 });
-                const pass = encoder.beginComputePass({ label: `WPT Shadow b${bounce}` });
-                pass.setPipeline(this.shadowTestPipeline);
-                pass.setBindGroup(0, bg);
-                pass.dispatchWorkgroups(r1D, 1, 1);
-                pass.end();
-            }
 
             // Pass 4: Miss (env sampling for rays that escaped this bounce)
-            {
-                const bg = dev.createBindGroup({
-                    layout: this.missLayout,
-                    entries: [
-                        { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                        { binding: 1, resource: { buffer: this.rayBuffer } },
-                        { binding: 2, resource: { buffer: this.hitBuffer } },
-                        { binding: 3, resource: { buffer: this.accumWorkBuffer } },
-                        { binding: 4, resource: this.stage.environment.envCubemapView },
-                        { binding: 5, resource: this.stage.environment.envSampler },
-                    ]
+            graph.addComputePass(`WPT Miss b${bounce}`)
+                .readBuffer(ptUniformHandle)
+                .readBuffer(rayHandle)
+                .writeBuffer(rayHandle)
+                .readBuffer(hitHandle)
+                .readBuffer(accumHandle)
+                .writeBuffer(accumHandle)
+                .execute((computePass, pass) => {
+                    const bg = dev.createBindGroup({
+                        layout: this.missLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(rayHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(hitHandle) } },
+                            { binding: 3, resource: { buffer: pass.getBuffer(accumHandle) } },
+                            { binding: 4, resource: this.stage.environment.envCubemapView },
+                            { binding: 5, resource: this.stage.environment.envSampler },
+                        ]
+                    });
+                    computePass.setPipeline(this.missPipeline);
+                    computePass.setBindGroup(0, bg);
+                    computePass.dispatchWorkgroups(r1D, 1, 1);
                 });
-                const pass = encoder.beginComputePass({ label: `WPT Miss b${bounce}` });
-                pass.setPipeline(this.missPipeline);
-                pass.setBindGroup(0, bg);
-                pass.dispatchWorkgroups(r1D, 1, 1);
-                pass.end();
-            }
         }
 
         // ---- ReSTIR: Copy current reservoir to prev for next frame ----
         if (this.config.restirEnabled) {
-            // Copy reservoirB (final spatial output) → prevReservoir for next frame's temporal
-            encoder.copyBufferToBuffer(
-                this.reservoirBufferB, 0,
-                this.prevReservoirBuffer, 0,
-                this.totalPixels * 64
-            );
-            // Copy pixel data → prevPixelData for next frame's temporal
-            encoder.copyBufferToBuffer(
-                this.pixelDataBuffer, 0,
-                this.prevPixelDataBuffer, 0,
-                this.totalPixels * 16
-            );
-            // Copy current camera → prevCamera for next frame's reprojection
-            renderer.device.queue.writeBuffer(this.prevCameraBuffer, 0, this.camera.uniforms.buffer);
+            graph.addGenericPass('ReSTIR History Copy')
+                .readBuffer(resBHandle)
+                .writeBuffer(prevResHandle)
+                .readBuffer(pixelDataHandle)
+                .writeBuffer(prevPixelDataHandle)
+                // prevCameraHandle technically doesn't have a read dependency inside ReSTIR History Copy
+                // but we write to it
+                .writeBuffer(prevCameraHandle)
+                .execute((enc, pass) => {
+                    // Copy reservoirB (final spatial output) → prevReservoir for next frame's temporal
+                    enc.copyBufferToBuffer(
+                        pass.getBuffer(resBHandle), 0,
+                        pass.getBuffer(prevResHandle), 0,
+                        this.totalPixels * 64
+                    );
+                    // Copy pixel data → prevPixelData for next frame's temporal
+                    enc.copyBufferToBuffer(
+                        pass.getBuffer(pixelDataHandle), 0,
+                        pass.getBuffer(prevPixelDataHandle), 0,
+                        this.totalPixels * 16
+                    );
+                    // Copy current camera → prevCamera for next frame's reprojection
+                    // using writeBuffer from queue inside execute is fine
+                    renderer.device.queue.writeBuffer(pass.getBuffer(prevCameraHandle), 0, this.camera.uniforms.buffer);
+                });
         }
 
         // ---- Pass: NRC Collect & Train (If enabled) ----
         if (this.stage.nrc.enabled) {
-            const bg = dev.createBindGroup({
-                layout: this.nrcCollectLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
-                    { binding: 1, resource: { buffer: this.ptNRCTrainDataBuffer } },
-                    { binding: 2, resource: { buffer: this.accumWorkBuffer } },
-                    { binding: 3, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
-                    { binding: 4, resource: { buffer: this.stage.nrc.trainingSamplesBuffer } },
-                ]
-            });
-            const pass = encoder.beginComputePass({ label: 'WPT NRC Collect' });
-            pass.setPipeline(this.nrcCollectPipeline);
-            pass.setBindGroup(0, bg);
-            // Dispatch 64 threads, max 4096 samples = 64 workgroups
-            pass.dispatchWorkgroups(Math.ceil(NRC.MAX_TRAINING_SAMPLES / 64), 1, 1);
-            pass.end();
+            graph.addComputePass('WPT NRC Collect')
+                .readBuffer(ptNRCTrainDataHandle)
+                .readBuffer(accumHandle)
+                // Using writeBuffer for trainingSamples as well, even if we don't have it explicitly bound
+                // because nrc manages itself
+                .execute((computePass, pass) => {
+                    const bg = dev.createBindGroup({
+                        layout: this.nrcCollectLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(accumHandle) } },
+                            { binding: 3, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
+                            { binding: 4, resource: { buffer: this.stage.nrc.trainingSamplesBuffer } },
+                        ]
+                    });
+                    computePass.setPipeline(this.nrcCollectPipeline);
+                    computePass.setBindGroup(0, bg);
+                    // Dispatch 64 threads, max 4096 samples = 64 workgroups
+                    computePass.dispatchWorkgroups(Math.ceil(NRC.MAX_TRAINING_SAMPLES / 64), 1, 1);
+                });
 
             // Run MLP update!
-            this.stage.nrc.trainOnly(encoder);
+            graph.addGenericPass('NRC Train')
+                .markRoot()
+                .execute((enc, _pass) => {
+                    this.stage.nrc.trainOnly(enc);
+                });
         }
 
         // ---- Pass: Accumulate (add frame to persistent sum) ----
-        {
-            const bg = dev.createBindGroup({
-                layout: this.accumulateLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                    { binding: 1, resource: { buffer: this.accumWorkBuffer } },
-                    { binding: 2, resource: { buffer: this.sampleSumBuffer } },
-                ]
+        graph.addComputePass('WPT Accumulate')
+            .readBuffer(ptUniformHandle)
+            .readBuffer(accumHandle)
+            .writeBuffer(accumHandle) // Writes zeros to it
+            .readBuffer(sampleSumHandle)
+            .writeBuffer(sampleSumHandle) // Adds radiance to it
+            .execute((computePass, pass) => {
+                const bg = dev.createBindGroup({
+                    layout: this.accumulateLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                        { binding: 1, resource: { buffer: pass.getBuffer(accumHandle) } },
+                        { binding: 2, resource: { buffer: pass.getBuffer(sampleSumHandle) } },
+                    ]
+                });
+                computePass.setPipeline(this.accumulatePipeline);
+                computePass.setBindGroup(0, bg);
+                computePass.dispatchWorkgroups(rW, rH, 1);
             });
-            const pass = encoder.beginComputePass({ label: 'WPT Accumulate' });
-            pass.setPipeline(this.accumulatePipeline);
-            pass.setBindGroup(0, bg);
-            pass.dispatchWorkgroups(rW, rH, 1);
-            pass.end();
-        }
 
         // ---- Pass: Tonemap Blit → Canvas ----
-        {
-            const canvasView = renderer.context.getCurrentTexture().createView();
-            const bg = dev.createBindGroup({
-                layout: this.tonemapLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.ptUniformBuffer } },
-                    { binding: 1, resource: { buffer: this.sampleSumBuffer } },
-                ]
+        graph.addGenericPass('WPT Tonemap Blit')
+            .markRoot()
+            .readBuffer(ptUniformHandle)
+            .readBuffer(sampleSumHandle)
+            .execute((enc, pass) => {
+                const canvasView = renderer.context.getCurrentTexture().createView();
+                const bg = dev.createBindGroup({
+                    layout: this.tonemapLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
+                        { binding: 1, resource: { buffer: pass.getBuffer(sampleSumHandle) } },
+                    ]
+                });
+                const renderPass = enc.beginRenderPass({
+                    label: 'WPT Tonemap Blit',
+                    colorAttachments: [{ view: canvasView, loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }]
+                });
+                renderPass.setPipeline(this.tonemapPipeline);
+                renderPass.setBindGroup(0, bg);
+                renderPass.draw(3);
+                renderPass.end();
             });
-            const pass = encoder.beginRenderPass({
-                label: 'WPT Tonemap Blit',
-                colorAttachments: [{ view: canvasView, loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }]
-            });
-            pass.setPipeline(this.tonemapPipeline);
-            pass.setBindGroup(0, bg);
-            pass.draw(3);
-            pass.end();
-        }
 
+        // ==========================================
+        // Compile and Execute RenderGraph
+        // ==========================================
+        graph.execute(encoder);
         dev.queue.submit([encoder.finish()]);
     }
 }
