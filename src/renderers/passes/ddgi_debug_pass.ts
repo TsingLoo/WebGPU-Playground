@@ -52,9 +52,7 @@ export class DDGIDebugPass {
     }
 
     execute(
-        encoder: GPUCommandEncoder,
-        canvasTextureView: GPUTextureView,
-        depthTextureView: GPUTextureView,
+        pass: GPURenderPassEncoder,
         deps: DDGIDebugPassDeps
     ) {
         if (!deps.ddgi.enabled || !deps.ddgi.irradianceAtlasAView) return;
@@ -72,17 +70,15 @@ export class DDGIDebugPass {
             ]
         });
 
-        const pass = encoder.beginRenderPass({
-            label: "DDGI Debug Probes Pass",
-            colorAttachments: [{ view: canvasTextureView, loadOp: "load", storeOp: "store" }],
-            depthStencilAttachment: { view: depthTextureView, depthLoadOp: "load", depthStoreOp: "store" }
-        });
-        
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, deps.cameraBindGroup);
         pass.setBindGroup(1, this.bindGroup);
-        // 24 vertices per octahedral instance, TOTAL_PROBES instances
-        pass.draw(24, DDGI.TOTAL_PROBES, 0, 0); 
-        pass.end();
+        
+        // Sphere index count per probe (ico sphere 3 subdiv) is ~240 indices, max probes is 22*22*22 = 10648
+        // Instanced draw
+        const sphereIndices = 240 * 3; // Approx 240 triangles = 720 vertices
+        const instanceCount = (deps.ddgi as any).gridDimensions[0] * (deps.ddgi as any).gridDimensions[1] * (deps.ddgi as any).gridDimensions[2];
+        
+        pass.draw(sphereIndices, instanceCount);
     }
 }

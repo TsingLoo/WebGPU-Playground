@@ -103,10 +103,10 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
     }
 
     protected override addToGraphShading(graph: RenderGraph, handles: GBufferHandles) {
-        let passBuilder = graph.addPass("Forward+ Shading")
+        let passBuilder = graph.addRenderPass("Forward+ Shading")
             .readTexture(handles.ssao)
-            .readTexture(handles.depth)
-            .writeTexture(handles.sceneColor);
+            .setDepthStencilAttachment(handles.depth, { depthReadOnly: true })
+            .addColorAttachment(handles.sceneColor, { clearValue: [0, 0, 0, 0] });
             
         if (this.requiresGBuffer()) {
             passBuilder
@@ -115,7 +115,7 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                 .readTexture(handles.albedo);
         }
             
-        passBuilder.execute((encoder, pass) => {
+        passBuilder.execute((shadingRenderPass, pass) => {
                 this.createShadingBindGroup();
                 
                 const reqG = this.requiresGBuffer();
@@ -148,11 +148,6 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                     ]
                 });
 
-                const shadingRenderPass = encoder.beginRenderPass({
-                    label: "Shading Pass",
-                    colorAttachments: [ { view: pass.getTextureView(handles.sceneColor), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" } ],
-                    depthStencilAttachment: { view: pass.getTextureView(handles.depth), depthReadOnly: true }
-                });
                 // Opaque queue
                 shadingRenderPass.setBindGroup(0, shadingStaticBindGroup);
                 shadingRenderPass.setBindGroup(3, this.giDynamicBindGroup);
@@ -190,7 +185,6 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                     shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                     shadingRenderPass.drawIndexed(primitive.numIndices);
                 }, false);
-                shadingRenderPass.end();
             });
     }
 

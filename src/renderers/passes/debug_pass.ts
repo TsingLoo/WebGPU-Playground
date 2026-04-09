@@ -37,9 +37,7 @@ export class DebugPass {
     }
 
     execute(
-        encoder: GPUCommandEncoder,
-        canvasTextureView: GPUTextureView,
-        depthTextureView: GPUTextureView,
+        pass: GPURenderPassEncoder,
         cameraBindGroup: GPUBindGroup,
         minPos: number[],
         maxPos: number[],
@@ -48,15 +46,9 @@ export class DebugPass {
         const boxData = new Float32Array([...minPos, 0, ...maxPos, 0, ...color]);
         renderer.device.queue.writeBuffer(this.boxBuffer, 0, boxData);
 
-        const pass = encoder.beginRenderPass({
-            label: "Debug Box Pass",
-            colorAttachments: [{ view: canvasTextureView, loadOp: "load", storeOp: "store" }],
-            depthStencilAttachment: { view: depthTextureView, depthLoadOp: "load", depthStoreOp: "store" }
-        });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, cameraBindGroup);
         pass.setBindGroup(1, this.bindGroup);
         pass.draw(24);
-        pass.end();
     }
 }

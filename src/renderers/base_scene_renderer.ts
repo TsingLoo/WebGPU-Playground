@@ -227,29 +227,19 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         const specularHandle = graph.createTexture("GBufferSpecular", { format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
 
         // 1. Stage Data Update Pass
-        graph.addPass("Stage Updates")
+        graph.addGenericPass("Stage Updates")
             .markRoot()
             .execute((_, _pass) => {
                 this.stage.updateSunLight();
             });
 
         // 2. Z-Prepass
-        graph.addPass("Z-Prepass")
-            .writeTexture(depthHandle)
-            .execute((enc, pass) => {
+        graph.addRenderPass("Z-Prepass")
+            .setDepthStencilAttachment(depthHandle, { clearValue: 0.0 })
+            .execute((zPrepass, pass) => {
                 // Update our class property so legacy systems can read it
                 this.depthTextureView = pass.getTextureView(depthHandle);
 
-                const zPrepass = enc.beginRenderPass({
-                    label: "z prepass",
-                    colorAttachments: [],
-                    depthStencilAttachment: {
-                        view: this.depthTextureView,
-                        depthClearValue: 0.0,
-                        depthLoadOp: "clear",
-                        depthStoreOp: "store"
-                    }
-                });
                 zPrepass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
 
                 // Opaque queue
@@ -285,11 +275,10 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                                        zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                                        zPrepass.drawIndexed(primitive.numIndices);
                                    }, false);
-                zPrepass.end();
             });
 
         // 2.5 Hi-Z Generation
-        graph.addPass("HiZ")
+        graph.addGenericPass("HiZ")
             .markRoot()
             .readTexture(depthHandle)
             .execute((enc, _pass) => {
@@ -300,7 +289,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 3. VSM Shadow Map Pass
         if (this.stage.vsmEnabled) {
-            graph.addPass("Shadow Map")
+            graph.addGenericPass("Shadow Map")
                 .markRoot()
                 .readTexture(depthHandle)
                 .execute((enc, _pass) => {
@@ -309,29 +298,19 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         }
 
         // 4. G-Buffer Pass
-        graph.addPass("G-Buffer")
+        graph.addRenderPass("G-Buffer")
             .readTexture(depthHandle)
-            .writeTexture(albedoHandle)
-            .writeTexture(normalHandle)
-            .writeTexture(positionHandle)
-            .writeTexture(specularHandle)
-            .execute((enc, pass) => {
-                // Bridge views
+            .addColorAttachment(albedoHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(normalHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(positionHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(specularHandle, { clearValue: [0,0,0,0] })
+            .setDepthStencilAttachment(depthHandle, { depthReadOnly: true })
+            .execute((gBufferPass, pass) => {
+                // Bridge views (legacy support)
                 this.gBufferAlbedoTextureView = pass.getTextureView(albedoHandle);
                 this.gBufferNormalTextureView = pass.getTextureView(normalHandle);
                 this.gBufferPositionTextureView = pass.getTextureView(positionHandle);
                 this.gBufferSpecularTextureView = pass.getTextureView(specularHandle);
-
-                const gBufferPass = enc.beginRenderPass({
-                    label: "G-buffer pass",
-                    colorAttachments: [
-                        { view: this.gBufferAlbedoTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                        { view: this.gBufferNormalTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                        { view: this.gBufferPositionTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                        { view: this.gBufferSpecularTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                    ],
-                    depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
-                });
                 gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
 
                 // Opaque queue
@@ -367,11 +346,10 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                                        gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
                                        gBufferPass.drawIndexed(primitive.numIndices);
                                    }, false);
-                gBufferPass.end();
             });
 
         // 5. GI Updates
-        graph.addPass("GI Updates")
+        graph.addGenericPass("GI Updates")
             .markRoot()
             .execute((enc, _pass) => {
                 if (this.stage.ddgi.enabled) {
@@ -396,7 +374,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             });
 
         // 6. Light Clustering
-        graph.addPass("Light Clustering")
+        graph.addGenericPass("Light Clustering")
             .markRoot()
             .execute((enc, _pass) => {
                 this.clusteringPass.execute(enc);
@@ -406,26 +384,22 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         this.addToGraphShading(graph, { depth: depthHandle, albedo: albedoHandle, normal: normalHandle, position: positionHandle, specular: specularHandle, sceneColor: sceneColorHandle, ssao: ssaoHandle });
 
-        graph.addPass("Skybox & Debug")
-             .readTexture(sceneColorHandle)
-             .writeTexture(sceneColorHandle, GPUTextureUsage.RENDER_ATTACHMENT)
-             .readTexture(depthHandle)
-             .writeTexture(canvasHandle)
-             .execute((enc, pass) => {
-                 const colorView = pass.getTextureView(sceneColorHandle);
-                 const depthView = pass.getTextureView(depthHandle);
-                 this.skyboxPass.execute(enc, colorView, depthView);
+        graph.addRenderPass("Skybox & Debug")
+             .addColorAttachment(sceneColorHandle)
+             .setDepthStencilAttachment(depthHandle, { depthReadOnly: true })
+             .execute((renderPass, _pass) => {
+                 this.skyboxPass.execute(renderPass);
 
                  if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
                      const isDDGI = this.stage.ddgi.enabled;
                      const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
                      const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
                      const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
-                     this.debugPass.execute(enc, canvasTextureView, depthView, this.geometryBindGroup, minPos, maxPos, color);
+                     this.debugPass.execute(renderPass, this.geometryBindGroup, minPos, maxPos, color);
                  }
 
                  if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
-                     this.ddgiDebugPass.execute(enc, canvasTextureView, depthView, {
+                     this.ddgiDebugPass.execute(renderPass, {
                          cameraBindGroupLayout: this.geometryBindGroupLayout,
                          cameraBindGroup: this.geometryBindGroup,
                          ddgi: this.stage.ddgi
@@ -437,16 +411,10 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             this.ssrPass.addToGraph(graph, this.stage.ssr.enabled, this.geometryBindGroup, sceneColorHandle, albedoHandle, normalHandle, specularHandle, depthHandle, hizHandle, canvasHandle);
         } else {
             // Graceful fallback for final output when post processing is omitted
-            graph.addPass("Final Output Blit")
+            graph.addRenderPass("Final Output Blit")
                 .readTexture(sceneColorHandle)
-                .writeTexture(canvasHandle)
-                .execute((enc, pass) => {
-                    const blitPass = enc.beginRenderPass({
-                        label: "Final Blit",
-                        colorAttachments: [{
-                            view: pass.getTextureView(canvasHandle), loadOp: "clear", clearValue: [0,0,0,1], storeOp: "store"
-                        }]
-                    });
+                .addColorAttachment(canvasHandle, { clearValue: [0,0,0,1] })
+                .execute((blitPass, pass) => {
                     blitPass.setPipeline(this.finalBlitPipeline);
                     // Create a temporary bindgroup for the simple copy
                     const blitBG = renderer.device.createBindGroup({
@@ -458,7 +426,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                     });
                     blitPass.setBindGroup(0, blitBG);
                     blitPass.draw(3);
-                    blitPass.end();
                 });
         }
 

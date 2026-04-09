@@ -54,16 +54,10 @@ export class SSAOPass {
         });
 
         if (!enabled) {
-            graph.addPass("SSAO Clear")
-                .writeTexture(blurHandle)
-                .execute((encoder, pass) => {
-                    const clearPass = encoder.beginRenderPass({
-                        label: "SSAO disabled clear pass",
-                        colorAttachments: [{
-                            view: pass.getTextureView(blurHandle), clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-                        }]
-                    });
-                    clearPass.end();
+            graph.addRenderPass("SSAO Clear")
+                .addColorAttachment(blurHandle, { clearValue: [1, 1, 1, 1] })
+                .execute((clearPass, pass) => {
+                    // Empty execution, clear is handled by attachment loadOp
                 });
             return blurHandle;
         }
@@ -73,17 +67,11 @@ export class SSAOPass {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
 
-        graph.addPass("SSAO Generation")
+        graph.addRenderPass("SSAO Generation")
             .readTexture(hizHandle)
             .readTexture(normalHandle)
-            .writeTexture(ssaoHandle)
-            .execute((encoder, pass) => {
-                const ssaoPass = encoder.beginRenderPass({
-                    label: "SSAO pass",
-                    colorAttachments: [{
-                        view: pass.getTextureView(ssaoHandle), clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-                    }]
-                });
+            .addColorAttachment(ssaoHandle, { clearValue: [1, 1, 1, 1] })
+            .execute((ssaoPass, pass) => {
                 ssaoPass.setPipeline(this.ssaoPipeline);
                 
                 const mainBG = renderer.device.createBindGroup({
@@ -99,19 +87,12 @@ export class SSAOPass {
 
                 ssaoPass.setBindGroup(0, mainBG);
                 ssaoPass.draw(3);
-                ssaoPass.end();
             });
 
-        graph.addPass("SSAO Blur")
+        graph.addRenderPass("SSAO Blur")
             .readTexture(ssaoHandle)
-            .writeTexture(blurHandle)
-            .execute((encoder, pass) => {
-                const blurPass = encoder.beginRenderPass({
-                    label: "SSAO blur pass",
-                    colorAttachments: [{
-                        view: pass.getTextureView(blurHandle), clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-                    }]
-                });
+            .addColorAttachment(blurHandle, { clearValue: [1, 1, 1, 1] })
+            .execute((blurPass, pass) => {
                 blurPass.setPipeline(this.blurPipeline);
 
                 let blurBindGroup = renderer.device.createBindGroup({
@@ -122,7 +103,6 @@ export class SSAOPass {
 
                 blurPass.setBindGroup(0, blurBindGroup);
                 blurPass.draw(3);
-                blurPass.end();
             });
 
         return blurHandle;

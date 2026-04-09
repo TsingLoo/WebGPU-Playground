@@ -71,15 +71,15 @@ export class SSRPass {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
 
-        graph.addPass("SSR Generate")
+        graph.addRenderPass("SSR Generate")
             .readTexture(sceneColorHandle)
             .readTexture(depthHandle)
             .readTexture(albedoHandle)
             .readTexture(normalHandle)
             .readTexture(specularHandle)
             .readTexture(hizHandle)
-            .writeTexture(ssrHitHandle)
-            .execute((encoder, pass) => {
+            .addColorAttachment(ssrHitHandle, { clearValue: [0, 0, 0, 0] })
+            .execute((ssrPass, pass) => {
                 const ssrBindGroup = renderer.device.createBindGroup({
                     label: "ssr main bgl",
                     layout: this.ssrPipeline.getBindGroupLayout(1),
@@ -93,28 +93,21 @@ export class SSRPass {
                     ]
                 });
 
-                const ssrPass = encoder.beginRenderPass({
-                    label: "SSR Generate pass",
-                    colorAttachments: [{
-                        view: pass.getTextureView(ssrHitHandle), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"
-                    }]
-                });
                 ssrPass.setPipeline(this.ssrPipeline);
                 ssrPass.setBindGroup(0, cameraBindGroup);
                 ssrPass.setBindGroup(1, ssrBindGroup);
                 ssrPass.draw(3);
-                ssrPass.end();
             });
 
-        graph.addPass("SSR Composite")
+        graph.addRenderPass("SSR Composite")
             .readTexture(sceneColorHandle)
             .readTexture(ssrHitHandle)
             .readTexture(albedoHandle)
             .readTexture(specularHandle)
             .readTexture(normalHandle)
             .readTexture(depthHandle)
-            .writeTexture(canvasHandle)
-            .execute((encoder, pass) => {
+            .addColorAttachment(canvasHandle, { clearValue: [0, 0, 0, 1] })
+            .execute((compositePass, pass) => {
                 const compositeBindGroup = renderer.device.createBindGroup({
                     label: "ssr composite",
                     layout: this.compositePipeline.getBindGroupLayout(1),
@@ -128,17 +121,10 @@ export class SSRPass {
                     ]
                 });
 
-                const compositePass = encoder.beginRenderPass({
-                    label: "SSR composite pass",
-                    colorAttachments: [{
-                        view: pass.getTextureView(canvasHandle), loadOp: "clear", clearValue: [0,0,0,1], storeOp: "store"
-                    }]
-                });
                 compositePass.setPipeline(this.compositePipeline);
                 compositePass.setBindGroup(0, cameraBindGroup);
                 compositePass.setBindGroup(1, compositeBindGroup);
                 compositePass.draw(3);
-                compositePass.end();
             });
     }
 }

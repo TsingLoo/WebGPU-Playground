@@ -43,15 +43,9 @@ export class SkyboxPass {
         });
     }
 
-    execute(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView, depthTextureView: GPUTextureView) {
-        const pass = encoder.beginRenderPass({
-            label: "Skybox Pass",
-            colorAttachments: [{ view: canvasTextureView, loadOp: "load", storeOp: "store" }],
-            depthStencilAttachment: { view: depthTextureView, depthLoadOp: "load", depthStoreOp: "store" }
-        });
+    execute(pass: GPURenderPassEncoder) {
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
         pass.draw(3);
-        pass.end();
     }
 }

@@ -76,10 +76,10 @@ export class VolumetricPass {
             scale: 0.5
         });
 
-        graph.addPass("Volumetric Lighting Generator")
+        graph.addRenderPass("Volumetric Lighting Generator")
             .readTexture(depthHandle)
-            .writeTexture(volumetricTextureHandle)
-            .execute((encoder, pass) => {
+            .addColorAttachment(volumetricTextureHandle, { clearValue: { r: 0, g: 0, b: 0, a: 0 } })
+            .execute((genPass, pass) => {
                 const generatorBindGroup = renderer.device.createBindGroup({
                     label: "volumetric lighting bind group",
                     layout: this.generatorPipeline.getBindGroupLayout(0),
@@ -93,22 +93,16 @@ export class VolumetricPass {
                     ]
                 });
 
-                // Generate volumetric scattering at half resolution
-                const genPass = encoder.beginRenderPass({
-                    label: "Volumetric Lighting Generator Pass",
-                    colorAttachments: [{ view: pass.getTextureView(volumetricTextureHandle), loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 0 }, storeOp: "store" }]
-                });
                 genPass.setPipeline(this.generatorPipeline);
                 genPass.setBindGroup(0, generatorBindGroup);
                 genPass.draw(3);
-                genPass.end();
             });
 
-        graph.addPass("Volumetric Composite")
+        graph.addRenderPass("Volumetric Composite")
             .readTexture(volumetricTextureHandle)
             .readTexture(depthHandle)
-            .writeTexture(canvasHandle)
-            .execute((encoder, pass) => {
+            .addColorAttachment(canvasHandle)
+            .execute((compPass, pass) => {
                 const compositeBindGroup = renderer.device.createBindGroup({
                     label: "volumetric composite bind group",
                     layout: this.compositePipeline.getBindGroupLayout(0),
@@ -119,15 +113,9 @@ export class VolumetricPass {
                     ]
                 });
 
-                // Composite onto canvas with additive blending
-                const compPass = encoder.beginRenderPass({
-                    label: "Volumetric Composite Pass",
-                    colorAttachments: [{ view: pass.getTextureView(canvasHandle), loadOp: "load", storeOp: "store" }]
-                });
                 compPass.setPipeline(this.compositePipeline);
                 compPass.setBindGroup(0, compositeBindGroup);
                 compPass.draw(3);
-                compPass.end();
             });
     }
 }
