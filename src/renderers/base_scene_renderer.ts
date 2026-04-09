@@ -68,6 +68,12 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     protected finalBlitSampler: GPUSampler;
 
     protected sharedRenderGraph = new RenderGraph(); // Persist pool across frames
+    
+    protected requiresGBuffer(): boolean {
+        // Base renderer assumes GBuffer is needed by default (Deferred always needs it).
+        // Forward+ can override this to optionally skip it when post-processing is off.
+        return true; 
+    }
 
     constructor(stage: Stage) {
         super(stage);
@@ -364,8 +370,8 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 gBufferPass.end();
             });
 
-        // 5. GI Updates & 6. Clustering
-        graph.addPass("GI & Clustering")
+        // 5. GI Updates
+        graph.addPass("GI Updates")
             .markRoot()
             .execute((enc, _pass) => {
                 if (this.stage.ddgi.enabled) {
@@ -387,6 +393,12 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                     );
                     this.radianceCascades.updateUniforms();
                 }
+            });
+
+        // 6. Light Clustering
+        graph.addPass("Light Clustering")
+            .markRoot()
+            .execute((enc, _pass) => {
                 this.clusteringPass.execute(enc);
             });
 

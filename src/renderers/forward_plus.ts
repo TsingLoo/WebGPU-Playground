@@ -97,17 +97,28 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
         }
     }
 
+    protected override requiresGBuffer(): boolean {
+        // Forward+ only needs G-Buffer for post-processing effects
+        return this.stage.ssao.enabled || this.stage.ssr.enabled;
+    }
+
     protected override addToGraphShading(graph: RenderGraph, handles: GBufferHandles) {
-        graph.addPass("Forward+ Shading")
-            .readTexture(handles.position)
-            .readTexture(handles.normal)
-            .readTexture(handles.albedo)
+        let passBuilder = graph.addPass("Forward+ Shading")
             .readTexture(handles.ssao)
             .readTexture(handles.depth)
-            .writeTexture(handles.sceneColor)
-            .execute((encoder, pass) => {
+            .writeTexture(handles.sceneColor);
+            
+        if (this.requiresGBuffer()) {
+            passBuilder
+                .readTexture(handles.position)
+                .readTexture(handles.normal)
+                .readTexture(handles.albedo);
+        }
+            
+        passBuilder.execute((encoder, pass) => {
                 this.createShadingBindGroup();
                 
+                const reqG = this.requiresGBuffer();
                 const shadingStaticBindGroup = renderer.device.createBindGroup({
                     label: "shading static bind group",
                     layout: this.shadingStaticBindGroupLayout,
@@ -128,9 +139,9 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
                         { binding: 13, resource: { buffer: this.vsm.vsmUniformBuffer } },
                         { binding: 14, resource: this.dummyTextureView },
                         { binding: 15, resource: { buffer: this.dummyBuffer } },
-                        { binding: 16, resource: pass.getTextureView(handles.position) },
-                        { binding: 17, resource: pass.getTextureView(handles.normal) },
-                        { binding: 18, resource: pass.getTextureView(handles.albedo) },
+                        { binding: 16, resource: reqG ? pass.getTextureView(handles.position) : this.dummyTextureView },
+                        { binding: 17, resource: reqG ? pass.getTextureView(handles.normal) : this.dummyTextureView },
+                        { binding: 18, resource: reqG ? pass.getTextureView(handles.albedo) : this.dummyTextureView },
                         { binding: 19, resource: this.dummyTextureView },
                         { binding: 20, resource: { buffer: this.dummyBuffer } },
                         { binding: 21, resource: pass.getTextureView(handles.ssao) },
