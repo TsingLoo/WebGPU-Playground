@@ -15,6 +15,10 @@ export class BVHData {
     triangleCount: number = 0;
     boundingBoxMin: [number, number, number] = [-1, -1, -1];
     boundingBoxMax: [number, number, number] = [1, 1, 1];
+
+    // ReSTIR: emissive triangle data
+    emissiveIndexBuffer!: GPUBuffer;  // array<vec4u> — same layout as indexBuffer, subset of emissive tris
+    emissiveTriCount: number = 0;
 }
 
 export function buildBVHFromScene(sceneRoot: Entity): BVHData {
@@ -236,6 +240,20 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     bvhData.tangentBuffer  = createAndUpload("BVH Tangent Buffer", wgpuTangents.buffer);
     bvhData.indexBuffer    = createAndUpload("BVH Index Buffer", wgpuIndices.buffer);
     bvhData.triangleCount  = totalTris;
+
+    // ============================================================
+    // ReSTIR: Extract emissive triangle indices
+    // ============================================================
+    // Currently Sponza has no emissive geometry, so emissiveTriCount = 0.
+    // Sun-only ReSTIR works fine with this. If emissive meshes are added,
+    // scan materialDataArray for non-zero emissive and populate this buffer.
+    bvhData.emissiveTriCount = 0;
+    bvhData.emissiveIndexBuffer = device.createBuffer({
+        label: 'BVH Emissive Index Buffer (empty)',
+        size: 16, // minimum buffer size
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    console.log(`[BVH] Emissive triangles: ${bvhData.emissiveTriCount}`);
     console.log("BVH Generation Complete.");
     
     return bvhData;

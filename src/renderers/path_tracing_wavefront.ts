@@ -2,17 +2,24 @@
  * path_tracing_wavefront.ts
  *
  * Wavefront Path Tracing Renderer for WebGPU.
+ * With full ReSTIR DI (Reservoir-based Spatiotemporal Importance Resampling).
  *
  * Architecture:
  *   Each frame = N bounce iterations of:
  *     1. ray_gen (bounce 0 only)   → rayBuffer[]
  *     2. intersect                 → hitBuffer[]
  *     3. shade + NEE               → new rayBuffer[], shadowBuffer[], accumBuffer[]
- *     4. shadow_test               → accumBuffer[] (direct light contribution)
- *     5. miss (env)                → accumBuffer[]
+ *        (NEE skipped for bounce 0 when ReSTIR is enabled)
+ *     4. [ReSTIR, bounce 0 only]:
+ *        a. restir_initial        → reservoirA[]
+ *        b. restir_temporal       → reservoirA[] (merged with prev frame)
+ *        c. restir_spatial        → reservoirB[] (merged with neighbors)
+ *        d. restir_shade          → shadowBuffer[] (from reservoir)
+ *     5. shadow_test               → accumBuffer[] (direct light contribution)
+ *     6. miss (env)                → accumBuffer[]
  *   Then:
- *     6. accumulate  → adds accumBuffer to sampleSumBuffer (persistent), clears accumBuffer
- *     7. tonemap blit → reads sampleSumBuffer / sample_count → canvas
+ *     7. accumulate  → adds accumBuffer to sampleSumBuffer (persistent), clears accumBuffer
+ *     8. tonemap blit → reads sampleSumBuffer / sample_count → canvas
  */
 
 import * as renderer from '../renderer';
@@ -30,6 +37,12 @@ interface PTConfig {
     maxBounces: number;
     clampRadiance: number;
     pixelScale: number;
+    // ReSTIR DI
+    restirEnabled: boolean;
+    restirCandidateCount: number;   // M = initial candidates per pixel
+    restirSpatialRadius: number;    // R = pixel radius for spatial resampling
+    restirSpatialCount: number;     // K = number of spatial neighbors
+    restirTemporalMaxM: number;     // temporal M clamp multiplier
 }
 
 export class WavefrontPathTracingRenderer extends Renderer {
@@ -39,6 +52,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
         maxBounces: 4,
         clampRadiance: 10.0,
         pixelScale: 1.0,
+        // ReSTIR defaults
+        restirEnabled: true,
+        restirCandidateCount: 32,
+        restirSpatialRadius: 30,
+        restirSpatialCount: 5,
+        restirTemporalMaxM: 20,
     };
 
     // ------------ Accumulation State ------------
@@ -55,6 +74,15 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private ptUniformBuffer!: GPUBuffer;  // PTUniforms (32 bytes)
     private ptNRCTrainDataBuffer!: GPUBuffer; // Array of NRCWavefrontTrainData
 
+    // ------------ ReSTIR GPU Buffers ------------
+    private reservoirBufferA!: GPUBuffer; // Current frame reservoir
+    private reservoirBufferB!: GPUBuffer; // Ping-pong / spatial output
+    private prevReservoirBuffer!: GPUBuffer; // Previous frame reservoir
+    private restirUniformBuffer!: GPUBuffer; // ReSTIRUniforms (32 bytes)
+    private prevCameraBuffer!: GPUBuffer;    // Previous frame camera uniforms
+    private pixelDataBuffer!: GPUBuffer;     // Current frame normal+depth per pixel (vec4f)
+    private prevPixelDataBuffer!: GPUBuffer; // Previous frame normal+depth per pixel
+
     private renderWidth!: number;
     private renderHeight!: number;
     private totalPixels!: number;
@@ -69,6 +97,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private nrcCollectPipeline!: GPUComputePipeline;
     private tonemapPipeline!: GPURenderPipeline;
 
+    // ReSTIR Pipelines
+    private restirInitialPipeline!: GPUComputePipeline;
+    private restirTemporalPipeline!: GPUComputePipeline;
+    private restirSpatialPipeline!: GPUComputePipeline;
+    private restirShadePipeline!: GPUComputePipeline;
+
     // ------------ Bind Group Layouts ------------
     private rayGenLayout!: GPUBindGroupLayout;
     private intersectLayout!: GPUBindGroupLayout;
@@ -80,11 +114,22 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private nrcCollectLayout!: GPUBindGroupLayout;
     private tonemapLayout!: GPUBindGroupLayout;
 
+    // ReSTIR Layouts
+    private restirInitialLayout!: GPUBindGroupLayout;
+    private restirTemporalLayout!: GPUBindGroupLayout;
+    private restirSpatialLayout!: GPUBindGroupLayout;
+    private restirShadeLayout!: GPUBindGroupLayout;
+
+    // ------------ ReSTIR Frame Counter ------------
+    private restirFrameIndex: number = 0;
+
     constructor(stage: Stage) {
         super(stage);
+        console.log('[WPT] Starting initialization...');
         this.initGPUResources();
+        console.log('[WPT] GPU resources allocated');
         this.initPipelines();
-        console.log('[WPT] Wavefront Path Tracing Renderer initialized');
+        console.log('[WPT] Wavefront Path Tracing Renderer initialized (ReSTIR enabled:', this.config.restirEnabled, ')');
     }
 
     // ============================================================
@@ -100,7 +145,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
         console.log(`[WPT] Render: ${this.renderWidth}×${this.renderHeight}, ${this.totalPixels} pixels`);
 
-        const storageUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+        const storageUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 
         // Ray buffer: 64 bytes per pixel
         this.rayBuffer = dev.createBuffer({ label: 'PT Ray Buffer',    size: this.totalPixels * 64, usage: storageUsage });
@@ -127,13 +172,67 @@ export class WavefrontPathTracingRenderer extends Renderer {
             usage: GPUBufferUsage.STORAGE,
         });
 
+        // ============================================================
+        // ReSTIR Buffers
+        // ============================================================
+        const reservoirSize = this.totalPixels * 64; // Reservoir = 64 bytes per pixel
+        console.log(`[ReSTIR] Allocating reservoir buffers: ${(reservoirSize / (1024*1024)).toFixed(2)} MB each`);
+
+        this.reservoirBufferA = dev.createBuffer({
+            label: 'ReSTIR Reservoir A',
+            size: reservoirSize,
+            usage: storageUsage,
+        });
+        this.reservoirBufferB = dev.createBuffer({
+            label: 'ReSTIR Reservoir B',
+            size: reservoirSize,
+            usage: storageUsage,
+        });
+        this.prevReservoirBuffer = dev.createBuffer({
+            label: 'ReSTIR Prev Reservoir',
+            size: reservoirSize,
+            usage: storageUsage,
+        });
+        console.log('[ReSTIR] Reservoir buffers created (A, B, Prev)');
+
+        // ReSTIR uniforms: 32 bytes (8 × u32)
+        this.restirUniformBuffer = dev.createBuffer({
+            label: 'ReSTIR Uniforms',
+            size: 32,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        console.log('[ReSTIR] Uniform buffer created');
+
+        // Previous camera buffer (same size as camera uniforms)
+        this.prevCameraBuffer = dev.createBuffer({
+            label: 'ReSTIR Prev Camera',
+            size: this.camera.uniforms.buffer.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        console.log('[ReSTIR] Previous camera buffer created');
+
+        // Per-pixel data: vec4f(normal.xyz, linear_depth) — 16 bytes per pixel
+        const pixelDataSize = this.totalPixels * 16;
+        this.pixelDataBuffer = dev.createBuffer({
+            label: 'ReSTIR Pixel Data',
+            size: pixelDataSize,
+            usage: storageUsage,
+        });
+        this.prevPixelDataBuffer = dev.createBuffer({
+            label: 'ReSTIR Prev Pixel Data',
+            size: pixelDataSize,
+            usage: storageUsage,
+        });
+        console.log(`[ReSTIR] Pixel data buffers created: ${(pixelDataSize / (1024*1024)).toFixed(2)} MB each`);
+
         this.uploadPTUniforms();
+        this.uploadReSTIRUniforms();
     }
 
     private initPipelines() {
         const dev = renderer.device;
 
-        // ---- Bind Group Layouts ----
+        // ---- Bind Group Layouts (existing passes) ----
 
         this.rayGenLayout = dev.createBindGroupLayout({
             label: 'PT RayGen Layout',
@@ -247,6 +346,86 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
+        // ============================================================
+        // ReSTIR Bind Group Layouts
+        // ============================================================
+        console.log('[ReSTIR] Creating bind group layouts...');
+
+        this.restirInitialLayout = dev.createBindGroupLayout({
+            label: 'ReSTIR Initial Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // pt
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // materials
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // sun_light
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // reservoir_buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // emissive_indices
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_pos
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pixel_data_out
+            ]
+        });
+        console.log('[ReSTIR] Initial layout created');
+
+        this.restirTemporalLayout = dev.createBindGroupLayout({
+            label: 'ReSTIR Temporal Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // pt
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // camera
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // prev_camera
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // reservoir_buffer (r/w)
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // prev_reservoir
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // prev_pixel_data
+            ]
+        });
+        console.log('[ReSTIR] Temporal layout created');
+
+        this.restirSpatialLayout = dev.createBindGroupLayout({
+            label: 'ReSTIR Spatial Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // pt
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // reservoir_in
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // reservoir_out
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // pixel_data
+            ]
+        });
+        console.log('[ReSTIR] Spatial layout created');
+
+        this.restirShadeLayout = dev.createBindGroupLayout({
+            label: 'ReSTIR Shade Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // pt
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // restir uniforms
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },            // camera
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // ray_buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // hit_buffer
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // reservoir_buffer
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // shadow_buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // accum_buffer
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // materials
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // base_color_tex
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // mr_tex
+                { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
+                { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_normals
+                { binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_tangents
+                { binding: 15, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // normal_map_tex
+                { binding: 16, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pixel_data_out
+            ]
+        });
+        console.log('[ReSTIR] Shade layout created');
+
         // ---- Compute Pipelines ----
         const mkCompute = (label: string, code: string, layout: GPUBindGroupLayout) =>
             pipelineCache.getComputePipeline(dev, {
@@ -263,12 +442,30 @@ export class WavefrontPathTracingRenderer extends Renderer {
             }, label);
 
         this.rayGenPipeline     = mkCompute('WPT RayGen',     shaders.ptRayGenSrc,     this.rayGenLayout);
+        console.log('[WPT] RayGen pipeline created');
         this.intersectPipeline  = mkCompute('WPT Intersect',  shaders.ptIntersectSrc,  this.intersectLayout);
+        console.log('[WPT] Intersect pipeline created');
         this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeNRCLayout]);
+        console.log('[WPT] Shade pipeline created');
         this.shadowTestPipeline = mkCompute('WPT ShadowTest', shaders.ptShadowTestSrc, this.shadowTestLayout);
+        console.log('[WPT] ShadowTest pipeline created');
         this.missPipeline       = mkCompute('WPT Miss',       shaders.ptMissSrc,       this.missLayout);
+        console.log('[WPT] Miss pipeline created');
         this.accumulatePipeline = mkCompute('WPT Accumulate', shaders.ptAccumulateSrc, this.accumulateLayout);
+        console.log('[WPT] Accumulate pipeline created');
         this.nrcCollectPipeline = mkCompute('WPT NRC Collect', shaders.nrcPtCollectSrc, this.nrcCollectLayout);
+        console.log('[WPT] NRC Collect pipeline created');
+
+        // ---- ReSTIR Pipelines ----
+        console.log('[ReSTIR] Creating compute pipelines...');
+        this.restirInitialPipeline  = mkCompute('ReSTIR Initial',  shaders.ptRestirInitialSrc,  this.restirInitialLayout);
+        console.log('[ReSTIR] Initial pipeline created');
+        this.restirTemporalPipeline = mkCompute('ReSTIR Temporal', shaders.ptRestirTemporalSrc, this.restirTemporalLayout);
+        console.log('[ReSTIR] Temporal pipeline created');
+        this.restirSpatialPipeline  = mkCompute('ReSTIR Spatial',  shaders.ptRestirSpatialSrc,  this.restirSpatialLayout);
+        console.log('[ReSTIR] Spatial pipeline created');
+        this.restirShadePipeline    = mkCompute('ReSTIR Shade',    shaders.ptRestirShadeSrc,    this.restirShadeLayout);
+        console.log('[ReSTIR] Shade pipeline created');
 
         // ---- Tonemap Render Pipeline ----
         const tonemapModule = dev.createShaderModule({ label: 'WPT Tonemap', code: shaders.ptTonemapSrc });
@@ -329,8 +526,26 @@ export class WavefrontPathTracingRenderer extends Renderer {
         u32[4] = this.config.maxBounces;
         f32[5] = this.config.clampRadiance;
         f32[6] = this.config.pixelScale;
-        u32[7] = 0;
+        u32[7] = this.config.restirEnabled ? 1 : 0;
         renderer.device.queue.writeBuffer(this.ptUniformBuffer, 0, buf);
+    }
+
+    // ============================================================
+    // ReSTIR Uniforms upload
+    // ============================================================
+    private uploadReSTIRUniforms() {
+        const buf = new ArrayBuffer(32);
+        const u32 = new Uint32Array(buf);
+        const bvhData = this.stage.scene.bvhData;
+        u32[0] = this.config.restirCandidateCount;
+        u32[1] = this.config.restirSpatialRadius;
+        u32[2] = this.config.restirSpatialCount;
+        u32[3] = this.config.restirTemporalMaxM;
+        u32[4] = this.config.restirEnabled ? 1 : 0;
+        u32[5] = this.restirFrameIndex;
+        u32[6] = bvhData ? bvhData.emissiveTriCount : 0;
+        u32[7] = 0; // pad
+        renderer.device.queue.writeBuffer(this.restirUniformBuffer, 0, buf);
     }
 
     // ============================================================
@@ -348,7 +563,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
         }
 
         this.sampleCount++;
+        this.restirFrameIndex++;
         this.uploadPTUniforms();
+        this.uploadReSTIRUniforms();
 
         const bvhData = scene.bvhData;
         const encoder = dev.createCommandEncoder({ label: 'WPT Frame' });
@@ -417,7 +634,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.end();
             }
 
-            // Pass 2: Shade + NEE
+            // Pass 2: Shade + NEE (NEE skipped for bounce 0 when ReSTIR active)
             {
                 const bg = dev.createBindGroup({
                     layout: this.shadeLayout,
@@ -456,6 +673,114 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.setBindGroup(1, nrcBg);
                 pass.dispatchWorkgroups(r1D, 1, 1);
                 pass.end();
+            }
+
+            // ============================================================
+            // ReSTIR DI — only at bounce 0
+            // ============================================================
+            if (bounce === 0 && this.config.restirEnabled) {
+                // Pass A: Initial Candidate Generation (RIS)
+                {
+                    const bg = dev.createBindGroup({
+                        layout: this.restirInitialLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
+                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
+                            { binding: 2, resource: { buffer: this.rayBuffer } },
+                            { binding: 3, resource: { buffer: this.hitBuffer } },
+                            { binding: 4, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 5, resource: { buffer: this.stage.sunLightBuffer } },
+                            { binding: 6, resource: { buffer: this.reservoirBufferA } },
+                            { binding: 7, resource: { buffer: bvhData.emissiveIndexBuffer } },
+                            { binding: 8, resource: { buffer: bvhData.positionBuffer } },
+                            { binding: 9, resource: { buffer: bvhData.normalBuffer } },
+                            { binding: 10, resource: { buffer: bvhData.uvBuffer } },
+                            { binding: 11, resource: { buffer: this.pixelDataBuffer } },
+                        ]
+                    });
+                    const pass = encoder.beginComputePass({ label: 'ReSTIR Initial' });
+                    pass.setPipeline(this.restirInitialPipeline);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(r1D, 1, 1);
+                    pass.end();
+                }
+
+                // Pass B: Temporal Resampling
+                {
+                    const bg = dev.createBindGroup({
+                        layout: this.restirTemporalLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
+                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
+                            { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
+                            { binding: 3, resource: { buffer: this.prevCameraBuffer } },
+                            { binding: 4, resource: { buffer: this.reservoirBufferA } },
+                            { binding: 5, resource: { buffer: this.prevReservoirBuffer } },
+                            { binding: 6, resource: { buffer: this.rayBuffer } },
+                            { binding: 7, resource: { buffer: this.hitBuffer } },
+                            { binding: 8, resource: { buffer: bvhData.normalBuffer } },
+                            { binding: 9, resource: { buffer: this.prevPixelDataBuffer } },
+                        ]
+                    });
+                    const pass = encoder.beginComputePass({ label: 'ReSTIR Temporal' });
+                    pass.setPipeline(this.restirTemporalPipeline);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(r1D, 1, 1);
+                    pass.end();
+                }
+
+                // Pass C: Spatial Resampling (A → B)
+                {
+                    const bg = dev.createBindGroup({
+                        layout: this.restirSpatialLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
+                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
+                            { binding: 2, resource: { buffer: this.reservoirBufferA } },   // in
+                            { binding: 3, resource: { buffer: this.reservoirBufferB } },   // out
+                            { binding: 4, resource: { buffer: this.rayBuffer } },
+                            { binding: 5, resource: { buffer: this.hitBuffer } },
+                            { binding: 6, resource: { buffer: bvhData.normalBuffer } },
+                            { binding: 7, resource: { buffer: this.pixelDataBuffer } },
+                        ]
+                    });
+                    const pass = encoder.beginComputePass({ label: 'ReSTIR Spatial' });
+                    pass.setPipeline(this.restirSpatialPipeline);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(r1D, 1, 1);
+                    pass.end();
+                }
+
+                // Pass D: ReSTIR Shade → Shadow Ray (reads from B)
+                {
+                    const bg = dev.createBindGroup({
+                        layout: this.restirShadeLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: this.ptUniformBuffer } },
+                            { binding: 1, resource: { buffer: this.restirUniformBuffer } },
+                            { binding: 2, resource: { buffer: this.camera.uniformsBuffer } },
+                            { binding: 3, resource: { buffer: this.rayBuffer } },
+                            { binding: 4, resource: { buffer: this.hitBuffer } },
+                            { binding: 5, resource: { buffer: this.reservoirBufferB } },
+                            { binding: 6, resource: { buffer: this.shadowBuffer } },
+                            { binding: 7, resource: { buffer: this.accumWorkBuffer } },
+                            { binding: 8, resource: { buffer: scene.globalMaterialBuffer } },
+                            { binding: 9, resource: scene.baseColorTexArrayView },
+                            { binding: 10, resource: baseColorSampler },
+                            { binding: 11, resource: scene.mrTexArrayView },
+                            { binding: 12, resource: { buffer: bvhData.uvBuffer } },
+                            { binding: 13, resource: { buffer: bvhData.normalBuffer } },
+                            { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
+                            { binding: 15, resource: scene.normalMapTexArrayView },
+                            { binding: 16, resource: { buffer: this.pixelDataBuffer } },
+                        ]
+                    });
+                    const pass = encoder.beginComputePass({ label: 'ReSTIR Shade' });
+                    pass.setPipeline(this.restirShadePipeline);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(r1D, 1, 1);
+                    pass.end();
+                }
             }
 
             // Pass 3: Shadow Test (with alpha-cutout transparency)
@@ -501,6 +826,24 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 pass.dispatchWorkgroups(r1D, 1, 1);
                 pass.end();
             }
+        }
+
+        // ---- ReSTIR: Copy current reservoir to prev for next frame ----
+        if (this.config.restirEnabled) {
+            // Copy reservoirB (final spatial output) → prevReservoir for next frame's temporal
+            encoder.copyBufferToBuffer(
+                this.reservoirBufferB, 0,
+                this.prevReservoirBuffer, 0,
+                this.totalPixels * 64
+            );
+            // Copy pixel data → prevPixelData for next frame's temporal
+            encoder.copyBufferToBuffer(
+                this.pixelDataBuffer, 0,
+                this.prevPixelDataBuffer, 0,
+                this.totalPixels * 16
+            );
+            // Copy current camera → prevCamera for next frame's reprojection
+            renderer.device.queue.writeBuffer(this.prevCameraBuffer, 0, this.camera.uniforms.buffer);
         }
 
         // ---- Pass: NRC Collect & Train (If enabled) ----

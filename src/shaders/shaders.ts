@@ -69,6 +69,13 @@ import ptMissRaw from './gi/path_tracing/miss.cs.wgsl?raw';
 import ptAccumulateRaw from './gi/path_tracing/accumulate.cs.wgsl?raw';
 import ptTonemapRaw from './gi/path_tracing/pt_tonemap.wgsl?raw';
 
+// ReSTIR DI shaders
+import restirCommonRaw from './gi/path_tracing/restir_common.wgsl?raw';
+import restirInitialRaw from './gi/path_tracing/restir_initial.cs.wgsl?raw';
+import restirTemporalRaw from './gi/path_tracing/restir_temporal.cs.wgsl?raw';
+import restirSpatialRaw from './gi/path_tracing/restir_spatial.cs.wgsl?raw';
+import restirShadeRaw from './gi/path_tracing/restir_shade.cs.wgsl?raw';
+
 // Shadow shaders
 import shadowVertRaw from './shadows/shadow.vs.wgsl?raw';
 import shadowFragRaw from './shadows/shadow.fs.wgsl?raw';
@@ -351,3 +358,18 @@ export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTo
 
 // NRC Collect Training requires full PT structs and NRC structs
 export const nrcPtCollectSrc: string = processPTShaderRaw(nrcPtCollectRaw);
+
+// ===========================================================================
+// ReSTIR DI shaders
+// ===========================================================================
+const restirCommonSrc: string = evalShaderRaw(restirCommonRaw);
+
+// Builds a complete ReSTIR compute shader: common + nrc_common + bvh + pt_common + restir_common + shader_body
+function processReSTIRShaderRaw(raw: string): string {
+    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + restirCommonSrc + evalShaderRaw(raw);
+}
+
+export const ptRestirInitialSrc: string = processReSTIRShaderRaw(restirInitialRaw);
+export const ptRestirTemporalSrc: string = processReSTIRShaderRaw(restirTemporalRaw);
+export const ptRestirSpatialSrc: string = processReSTIRShaderRaw(restirSpatialRaw);
+export const ptRestirShadeSrc: string = processReSTIRShaderRaw(restirShadeRaw);

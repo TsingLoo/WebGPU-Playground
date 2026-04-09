@@ -251,8 +251,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         new_throughput *= 20.0 / tp_max;
     }
 
-    // NEE — direct sun light
-    if (sun_light.color.a > 0.5 && !is_specular) {
+    // NEE — direct sun light (skipped for bounce 0 when ReSTIR is active)
+    let skip_nee = (pt.restir_enabled == 1u) && (ray.bounce == 0u);
+    if (sun_light.color.a > 0.5 && !is_specular && !skip_nee) {
         let base_sun_dir = normalize(sun_light.direction.xyz);
         let up_vec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(base_sun_dir.x) > 0.9);
         let sun_tangent = normalize(cross(base_sun_dir, up_vec));
