@@ -21,18 +21,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let ray = ray_buffer[pixel_id];
     let hit = hit_buffer[pixel_id];
 
-    // We want to add environment light for rays that MISSED geometry at this bounce.
-    // After the shade pass:
-    //  - If the ray missed: shade set ray_active=0, hit.did_hit=0
-    //  - If the ray hit and was shaded: shade spawned a new bounce ray, ray_active=1, hit.did_hit=1
-    //  - If the ray was terminated (RR/bounce limit): ray_active=0, hit.did_hit=1
-    //  - If the ray was already inactive from a previous bounce: ray_active=0
+    // A ray "missed" when:
+    //  - ray_active == 1 (was active going into this bounce)
+    //  - did_hit == 0 (intersect found no geometry)
+    // All other cases:
+    //  - ray_active==0: already terminated (RR, bounce limit, or previously processed miss)
+    //  - did_hit==1: hit geometry, shade pass processed it
 
-    // Only process rays that missed geometry (did_hit == 0) and have non-zero throughput
-    if (hit.did_hit != 0u) { return; }
-
-    // If throughput is zero, no point sampling env
-    if (max(ray.throughput.x, max(ray.throughput.y, ray.throughput.z)) < 0.001) { return; }
+    if (ray.ray_active == 0u || hit.did_hit != 0u) { return; }
 
     let env_color    = textureSampleLevel(env_cubemap, env_sampler, ray.direction, 0.0).xyz;
     let contribution = clamp(ray.throughput * env_color, vec3f(0.0), vec3f(pt.clamp_radiance));
@@ -40,8 +36,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let prev = accum_buffer[pixel_id];
     accum_buffer[pixel_id] = vec4f(prev.xyz + contribution, prev.w);
 
-    // Mark ray as done
+    // Terminate ray
     ray_buffer[pixel_id].ray_active = 0u;
-    // Mark hit as processed so we don't re-add env on the next bounce iteration
-    hit_buffer[pixel_id].did_hit = 1u;
 }

@@ -70,7 +70,7 @@ export class SceneLoader {
                     // This is a temporary monolithic mapping. In a full engine, GLTF chunks are components.
                     const result = await loadGltf(compConfig.path);
                     entity.addChild(result.rootEntity);
-                    await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+                    await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
                     scene.bvhData = buildBVHFromScene(scene.root);
                     const voxelResult = buildVoxelGrid(scene.root);
                     scene.voxelGrid = voxelResult.voxelGrid;
