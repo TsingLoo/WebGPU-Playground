@@ -205,6 +205,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 1. Stage Data Update Pass
         graph.addPass("Stage Updates")
+            .markRoot()
             .execute((_, _pass) => {
                 this.stage.updateSunLight();
             });
@@ -266,6 +267,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 2.5 Hi-Z Generation
         graph.addPass("HiZ")
+            .markRoot()
             .readTexture(depthHandle)
             .execute((enc, _pass) => {
                 this.hizPass.execute(enc, this.depthTextureView);
@@ -275,6 +277,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 3. VSM Shadow Map Pass
         graph.addPass("Shadow Map")
+            .markRoot()
             .readTexture(depthHandle)
             .execute((enc, _pass) => {
                 this.stage.renderShadowMap(enc, this.depthTextureView);
@@ -344,6 +347,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 5. GI Updates & 6. Clustering
         graph.addPass("GI & Clustering")
+            .markRoot()
             .execute((enc, _pass) => {
                 if (this.stage.ddgi.enabled) {
                     this.stage.ddgi.update(
@@ -373,7 +377,9 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         graph.addPass("Skybox & Debug")
              .readTexture(sceneColorHandle)
+             .writeTexture(sceneColorHandle, GPUTextureUsage.RENDER_ATTACHMENT)
              .readTexture(depthHandle)
+             .writeTexture(canvasHandle)
              .execute((enc, pass) => {
                  const colorView = pass.getTextureView(sceneColorHandle);
                  const depthView = pass.getTextureView(depthHandle);

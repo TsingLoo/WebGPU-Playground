@@ -4,10 +4,17 @@ export type ResourceHandle = number;
 
 export interface TextureDescriptor {
     format: GPUTextureFormat;
-    usage: GPUTextureUsageFlags;
+    usage?: GPUTextureUsageFlags; // Now optional! Graph will deduce it.
     width?: number; // if undefined, uses canvas width
     height?: number; // if undefined, uses canvas height
     scale?: number; // multiplier for canvas size
+}
+
+export interface SubresourceRange {
+    baseMipLevel?: number;
+    mipLevelCount?: number;
+    baseArrayLayer?: number;
+    arrayLayerCount?: number;
 }
 
 interface PhysicalTexture {
@@ -16,15 +23,24 @@ interface PhysicalTexture {
     desc: TextureDescriptor;
     width: number;
     height: number;
+    framesIdle: number;
+    subViews: Map<string, GPUTextureView>;
 }
 
 export type PassExecuteFn = (encoder: GPUCommandEncoder, pass: PassResolver) => void;
 
+interface ResourceAccess {
+    handle: ResourceHandle;
+    usage: GPUTextureUsageFlags;
+    range?: SubresourceRange;
+}
+
 class RenderPassData {
     name: string;
-    reads: Map<ResourceHandle, boolean> = new Map();
-    writes: Map<ResourceHandle, boolean> = new Map();
+    reads: ResourceAccess[] = [];
+    writes: ResourceAccess[] = [];
     executeFn!: PassExecuteFn;
+    isRoot: boolean = false;
     
     constructor(name: string) {
         this.name = name;
@@ -32,19 +48,24 @@ class RenderPassData {
 }
 
 export interface PassResolver {
-    getTextureView(handle: ResourceHandle): GPUTextureView;
+    getTextureView(handle: ResourceHandle, range?: SubresourceRange): GPUTextureView;
 }
 
 export class PassBuilder {
     constructor(private passParams: RenderPassData) {}
 
-    readTexture(handle: ResourceHandle): PassBuilder {
-        this.passParams.reads.set(handle, true);
+    markRoot(): PassBuilder {
+        this.passParams.isRoot = true;
         return this;
     }
 
-    writeTexture(handle: ResourceHandle): PassBuilder {
-        this.passParams.writes.set(handle, true);
+    readTexture(handle: ResourceHandle, usage: GPUTextureUsageFlags = 0, range?: SubresourceRange): PassBuilder {
+        this.passParams.reads.push({ handle, usage, range });
+        return this;
+    }
+
+    writeTexture(handle: ResourceHandle, usage: GPUTextureUsageFlags = 0, range?: SubresourceRange): PassBuilder {
+        this.passParams.writes.push({ handle, usage, range });
         return this;
     }
 
@@ -70,6 +91,8 @@ export class RenderGraph implements PassResolver {
 
     public createTexture(name: string, desc: TextureDescriptor): ResourceHandle {
         const handle = this.nextHandle++;
+        // Start usage at 0 if not provided, accumulate later
+        if (desc.usage === undefined) desc.usage = 0;
         this.resourceDescs.set(handle, desc);
         this.resourceNames.set(handle, name);
         return handle;
@@ -89,15 +112,26 @@ export class RenderGraph implements PassResolver {
     }
 
     // PassResolver implementation
-    public getTextureView(handle: ResourceHandle): GPUTextureView {
+    public getTextureView(handle: ResourceHandle, range?: SubresourceRange): GPUTextureView {
         if (this.importedViews.has(handle)) {
+            // Cannot easily fetch sub-ranges of externally provided views without their texture reference.
+            // Assuming imported views are full views for now.
             return this.importedViews.get(handle)!;
         }
+        
         const phys = this.handleToPhysical.get(handle);
         if (!phys) {
             throw new Error(`Texture handle ${handle} (${this.resourceNames.get(handle)}) has no physical texture bound.`);
         }
-        return phys.view;
+        
+        if (!range) return phys.view;
+
+        // Subresource key
+        const key = `${range.baseMipLevel || 0}_${range.mipLevelCount || 1}_${range.baseArrayLayer || 0}_${range.arrayLayerCount || 1}`;
+        if (!phys.subViews.has(key)) {
+            phys.subViews.set(key, phys.texture.createView(range as GPUTextureViewDescriptor));
+        }
+        return phys.subViews.get(key)!;
     }
 
     private resolveDimensions(desc: TextureDescriptor): { w: number, h: number } {
@@ -114,16 +148,26 @@ export class RenderGraph implements PassResolver {
         const { w, h } = this.resolveDimensions(desc);
         
         // Search pool for matching texture
+        let bestCandidateIdx = -1;
         for (let i = 0; i < this.physicalPool.length; i++) {
             const pt = this.physicalPool[i];
+            // Must have exactly same format and dimensions, and its usage capabilities must be a superset of requested
             if (pt.desc.format === desc.format && 
-                pt.desc.usage === desc.usage && 
                 pt.width === w && 
-                pt.height === h) {
-                // Remove from free pool
-                this.physicalPool.splice(i, 1);
-                return pt;
+                pt.height === h &&
+                (pt.desc.usage! & desc.usage!) === desc.usage!) {
+                bestCandidateIdx = i;
+                break;
             }
+        }
+        
+        if (bestCandidateIdx >= 0) {
+            const pt = this.physicalPool[bestCandidateIdx];
+            this.physicalPool.splice(bestCandidateIdx, 1);
+            pt.framesIdle = 0; // reset LRU
+            // Overwrite desc to reflect new logical context, but usage retains the physical capabilities
+            // Actually, keep the physical usage, as it's a superset.
+            return pt;
         }
         
         // Create new if not found
@@ -131,28 +175,77 @@ export class RenderGraph implements PassResolver {
             label: `RG_PhysTex_${name}`,
             size: [w, h],
             format: desc.format,
-            usage: desc.usage
+            usage: desc.usage!
         });
         
         return {
             texture,
             view: texture.createView(),
-            desc,
+            desc: { ...desc }, 
             width: w,
-            height: h
+            height: h,
+            framesIdle: 0,
+            subViews: new Map()
         };
     }
 
     public compile() {
-        // 1. Cull passes? (Skipping for now to ensure all logic runs)
-        const activePasses = this.passes;
+        // 1. Pass Culling (DAG Evaluation)
+        const activePasses: RenderPassData[] = [];
+        const requiredHandles = new Set<ResourceHandle>();
+        
+        // Imported handles are implicitly sinks (they are usually the swapchain canvas)
+        for (const [handle] of this.importedViews) {
+            requiredHandles.add(handle);
+        }
 
-        // 2. Compute Resource Lifetimes (First pass to last pass)
+        // Traverse backwards to find valid dependency chains
+        for (let i = this.passes.length - 1; i >= 0; i--) {
+            const pass = this.passes[i];
+            
+            let isNeeded = pass.isRoot;
+            if (!isNeeded) {
+                // If it writes to a required handle, it's needed
+                for (const write of pass.writes) {
+                    if (requiredHandles.has(write.handle)) {
+                        isNeeded = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isNeeded) {
+                // Add reads to required handles
+                for (const read of pass.reads) {
+                    requiredHandles.add(read.handle);
+                }
+                activePasses.push(pass);
+            }
+        }
+        
+        activePasses.reverse();
+
+        // 2. Automatically deduce GPUTextureUsage
+        for (const pass of activePasses) {
+            for (const read of pass.reads) {
+                const desc = this.resourceDescs.get(read.handle);
+                if (desc) desc.usage! |= read.usage;
+            }
+            for (const write of pass.writes) {
+                const desc = this.resourceDescs.get(write.handle);
+                if (desc) desc.usage! |= write.usage;
+            }
+        }
+
+        // 3. Compute Resource Lifetimes defined over active passes
         const resourceLifetimes = new Map<ResourceHandle, { start: number, end: number }>();
         
         for (let i = 0; i < activePasses.length; i++) {
             const pass = activePasses[i];
-            const allHandles = new Set([...pass.reads.keys(), ...pass.writes.keys()]);
+            const allHandles = new Set([
+                ...pass.reads.map(r => r.handle), 
+                ...pass.writes.map(w => w.handle)
+            ]);
             
             for (const handle of allHandles) {
                 if (!resourceLifetimes.has(handle)) {
@@ -163,14 +256,13 @@ export class RenderGraph implements PassResolver {
             }
         }
 
-        // Return lifetimes for execution
         return { activePasses, resourceLifetimes };
     }
 
     public execute(encoder: GPUCommandEncoder) {
         const { activePasses, resourceLifetimes } = this.compile();
+        console.log("Active Passes:", activePasses.map(p => p.name));
 
-        // Execution and Memory Aliasing
         const activePhysicals = new Map<ResourceHandle, PhysicalTexture>();
 
         for (let i = 0; i < activePasses.length; i++) {
@@ -179,7 +271,6 @@ export class RenderGraph implements PassResolver {
             // Allocate resources that start in this pass
             for (const [handle, lifetime] of resourceLifetimes.entries()) {
                 if (lifetime.start === i && !this.importedViews.has(handle)) {
-                    // It's a new virtual texture born here
                     const desc = this.resourceDescs.get(handle)!;
                     const name = this.resourceNames.get(handle)!;
                     const phys = this.getPhysicalTexture(desc, name);
@@ -195,23 +286,34 @@ export class RenderGraph implements PassResolver {
             for (const [handle, lifetime] of resourceLifetimes.entries()) {
                 if (lifetime.end === i && activePhysicals.has(handle)) {
                     const phys = activePhysicals.get(handle)!;
+                    phys.framesIdle = 0; // Reset just in case
                     this.physicalPool.push(phys);
                     activePhysicals.delete(handle);
-                    this.handleToPhysical.delete(handle); // no longer valid
+                    this.handleToPhysical.delete(handle); // no longer valid context
                 }
             }
         }
 
-        // Clean up passes so the graph can be rebuilt next frame
+        // LRU cleanup: Destroy physical textures not used for 5 frames
+        for (let i = this.physicalPool.length - 1; i >= 0; i--) {
+            this.physicalPool[i].framesIdle++;
+            if (this.physicalPool[i].framesIdle > 5) {
+                this.physicalPool[i].texture.destroy();
+                this.physicalPool.splice(i, 1);
+            }
+        }
+
+        // Clean up logical graph for next frame
         this.passes = [];
         this.importedViews.clear();
         this.resourceDescs.clear();
         this.resourceNames.clear();
     }
     
-    // Clear pool if resolution changes or memory needs to be freed
     public clearPhysicalPool() {
-        // GPUTextures will be garbage collected by JS once refs are removed
+        for (const phys of this.physicalPool) {
+            phys.texture.destroy();
+        }
         this.physicalPool = [];
     }
 }
