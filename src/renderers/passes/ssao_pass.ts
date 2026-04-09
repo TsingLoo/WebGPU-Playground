@@ -1,6 +1,5 @@
 import * as renderer from '../../renderer';
 import * as shaders from '../../shaders/shaders';
-import { BindGroupCache } from '../../engine/RenderTexManager';
 import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 
 export interface SSAOPassDeps {
@@ -87,7 +86,7 @@ export class SSAOPass {
                 });
                 ssaoPass.setPipeline(this.ssaoPipeline);
                 
-                const mainBG = BindGroupCache.get({
+                const mainBG = renderer.device.createBindGroup({
                     label: "ssao main bgl",
                     layout: this.ssaoPipeline.getBindGroupLayout(0),
                     entries: [
@@ -115,7 +114,7 @@ export class SSAOPass {
                 });
                 blurPass.setPipeline(this.blurPipeline);
 
-                let blurBindGroup = BindGroupCache.get({
+                let blurBindGroup = renderer.device.createBindGroup({
                     label: "ssao blur bgl",
                     layout: this.blurPipeline.getBindGroupLayout(0),
                     entries: [{ binding: 0, resource: pass.getTextureView(ssaoHandle) }]

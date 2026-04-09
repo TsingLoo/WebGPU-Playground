@@ -1,6 +1,5 @@
 import * as renderer from '../../renderer';
 import * as shaders from '../../shaders/shaders';
-import { BindGroupCache } from '../../engine/RenderTexManager';
 import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 
 export interface SSRPassDeps {
@@ -82,7 +81,7 @@ export class SSRPass {
                 .readTexture(depthHandle)
                 .writeTexture(ssrHitHandle)
                 .execute((encoder, pass) => {
-                    const ssrBindGroup = BindGroupCache.get({
+                    const ssrBindGroup = renderer.device.createBindGroup({
                         label: "ssr params",
                         layout: this.ssrPipeline.getBindGroupLayout(1),
                         entries: [
@@ -129,7 +128,7 @@ export class SSRPass {
             .readTexture(depthHandle)
             .writeTexture(canvasHandle)
             .execute((encoder, pass) => {
-                const compositeBindGroup = BindGroupCache.get({
+                const compositeBindGroup = renderer.device.createBindGroup({
                     label: "ssr composite",
                     layout: this.compositePipeline.getBindGroupLayout(1),
                     entries: [

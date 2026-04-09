@@ -1,6 +1,5 @@
 import * as renderer from '../../renderer';
 import * as shaders from '../../shaders/shaders';
-import { BindGroupCache } from '../../engine/RenderTexManager';
 import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 import { VSM } from '../../stage/vsm';
 
@@ -81,7 +80,7 @@ export class VolumetricPass {
             .readTexture(depthHandle)
             .writeTexture(volumetricTextureHandle)
             .execute((encoder, pass) => {
-                const generatorBindGroup = BindGroupCache.get({
+                const generatorBindGroup = renderer.device.createBindGroup({
                     label: "volumetric lighting bind group",
                     layout: this.generatorPipeline.getBindGroupLayout(0),
                     entries: [
@@ -110,7 +109,7 @@ export class VolumetricPass {
             .readTexture(depthHandle)
             .writeTexture(canvasHandle)
             .execute((encoder, pass) => {
-                const compositeBindGroup = BindGroupCache.get({
+                const compositeBindGroup = renderer.device.createBindGroup({
                     label: "volumetric composite bind group",
                     layout: this.compositePipeline.getBindGroupLayout(0),
                     entries: [
