@@ -1,6 +1,7 @@
 import * as renderer from '../../renderer';
-import { RenderTexManager, RenderResource, BindGroupCache } from '../../engine/RenderTexManager';
 import * as shaders from '../../shaders/shaders';
+import { BindGroupCache } from '../../engine/RenderTexManager';
+import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 import { VSM } from '../../stage/vsm';
 
 export interface VolumetricPassDeps {
@@ -69,54 +70,65 @@ export class VolumetricPass {
         // Composite pipeline bindings are computed dynamically in execute
     }
 
-    execute(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView, depthTextureView: GPUTextureView) {
-        const volumetricTextureView = RenderTexManager.getTextureView(RenderResource.VolumetricHalfRes, {
+    addToGraph(graph: RenderGraph, canvasHandle: ResourceHandle, depthHandle: ResourceHandle) {
+        const volumetricTextureHandle = graph.createTexture("VolumetricHalfRes", {
             format: "rgba16float",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
             scale: 0.5
         });
 
-        const generatorBindGroup = BindGroupCache.get({
-            label: "volumetric lighting bind group",
-            layout: this.generatorPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: this.deps.cameraBuffer } },
-                { binding: 1, resource: depthTextureView },
-                { binding: 2, resource: { buffer: this.deps.sunLightBuffer } },
-                { binding: 3, resource: this.deps.vsm.physicalAtlasView },
-                { binding: 4, resource: { buffer: this.deps.vsm.pageTableBuffer } },
-                { binding: 5, resource: { buffer: this.deps.vsm.vsmUniformBuffer } },
-            ]
-        });
+        graph.addPass("Volumetric Lighting Generator")
+            .readTexture(depthHandle)
+            .writeTexture(volumetricTextureHandle)
+            .execute((encoder, pass) => {
+                const generatorBindGroup = BindGroupCache.get({
+                    label: "volumetric lighting bind group",
+                    layout: this.generatorPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: this.deps.cameraBuffer } },
+                        { binding: 1, resource: pass.getTextureView(depthHandle) },
+                        { binding: 2, resource: { buffer: this.deps.sunLightBuffer } },
+                        { binding: 3, resource: this.deps.vsm.physicalAtlasView },
+                        { binding: 4, resource: { buffer: this.deps.vsm.pageTableBuffer } },
+                        { binding: 5, resource: { buffer: this.deps.vsm.vsmUniformBuffer } },
+                    ]
+                });
 
-        // Generate volumetric scattering at half resolution
-        const genPass = encoder.beginRenderPass({
-            label: "Volumetric Lighting Generator Pass",
-            colorAttachments: [{ view: volumetricTextureView, loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 0 }, storeOp: "store" }]
-        });
-        genPass.setPipeline(this.generatorPipeline);
-        genPass.setBindGroup(0, generatorBindGroup);
-        genPass.draw(3);
-        genPass.end();
+                // Generate volumetric scattering at half resolution
+                const genPass = encoder.beginRenderPass({
+                    label: "Volumetric Lighting Generator Pass",
+                    colorAttachments: [{ view: pass.getTextureView(volumetricTextureHandle), loadOp: "clear", clearValue: { r: 0, g: 0, b: 0, a: 0 }, storeOp: "store" }]
+                });
+                genPass.setPipeline(this.generatorPipeline);
+                genPass.setBindGroup(0, generatorBindGroup);
+                genPass.draw(3);
+                genPass.end();
+            });
 
-        const compositeBindGroup = BindGroupCache.get({
-            label: "volumetric composite bind group",
-            layout: this.compositePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: volumetricTextureView },
-                { binding: 1, resource: depthTextureView },
-                { binding: 2, resource: { buffer: this.deps.cameraBuffer } },
-            ]
-        });
+        graph.addPass("Volumetric Composite")
+            .readTexture(volumetricTextureHandle)
+            .readTexture(depthHandle)
+            .writeTexture(canvasHandle)
+            .execute((encoder, pass) => {
+                const compositeBindGroup = BindGroupCache.get({
+                    label: "volumetric composite bind group",
+                    layout: this.compositePipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: pass.getTextureView(volumetricTextureHandle) },
+                        { binding: 1, resource: pass.getTextureView(depthHandle) },
+                        { binding: 2, resource: { buffer: this.deps.cameraBuffer } },
+                    ]
+                });
 
-        // Composite onto canvas with additive blending
-        const compPass = encoder.beginRenderPass({
-            label: "Volumetric Composite Pass",
-            colorAttachments: [{ view: canvasTextureView, loadOp: "load", storeOp: "store" }]
-        });
-        compPass.setPipeline(this.compositePipeline);
-        compPass.setBindGroup(0, compositeBindGroup);
-        compPass.draw(3);
-        compPass.end();
+                // Composite onto canvas with additive blending
+                const compPass = encoder.beginRenderPass({
+                    label: "Volumetric Composite Pass",
+                    colorAttachments: [{ view: pass.getTextureView(canvasHandle), loadOp: "load", storeOp: "store" }]
+                });
+                compPass.setPipeline(this.compositePipeline);
+                compPass.setBindGroup(0, compositeBindGroup);
+                compPass.draw(3);
+                compPass.end();
+            });
     }
 }

@@ -1,8 +1,8 @@
 import * as renderer from '../renderer';
-import { BindGroupCache } from '../engine/RenderTexManager';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
-import { BaseSceneRenderer } from './base_scene_renderer';
+import { BaseSceneRenderer, GBufferHandles } from './base_scene_renderer';
+import { RenderGraph } from '../engine/RenderGraph';
 
 export class ForwardPlusRenderer extends BaseSceneRenderer {
     shadingStaticBindGroupLayout: GPUBindGroupLayout;
@@ -97,79 +97,90 @@ export class ForwardPlusRenderer extends BaseSceneRenderer {
         }
     }
 
-    protected override executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView) {
-        const shadingStaticBindGroup = BindGroupCache.get({
-            label: "shading static bind group",
-            layout: this.shadingStaticBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
-                { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
-                { binding: 2, resource: { buffer: this.tileOffsetsDeviceBuffer }},
-                { binding: 3, resource: { buffer: this.globalLightIndicesDeviceBuffer }},
-                { binding: 4, resource: { buffer: this.clusterSetDeviceBuffer }},
-                { binding: 5, resource: this.stageEnv.irradianceMapView },
-                { binding: 6, resource: this.stageEnv.prefilteredMapView },
-                { binding: 7, resource: this.stageEnv.brdfLutView },
-                { binding: 8, resource: this.stageEnv.envSampler },
-                { binding: 9, resource: { buffer: this.stage.sunLightBuffer } },
-                { binding: 10, resource: this.vsm.physicalAtlasView },
-                { binding: 11, resource: this.vsm.shadowComparisonSampler },
-                { binding: 12, resource: { buffer: this.vsm.pageTableBuffer } },
-                { binding: 13, resource: { buffer: this.vsm.vsmUniformBuffer } },
-                { binding: 14, resource: this.dummyTextureView },
-                { binding: 15, resource: { buffer: this.dummyBuffer } },
-                { binding: 16, resource: this.gBufferPositionTextureView },
-                { binding: 17, resource: this.gBufferNormalTextureView },
-                { binding: 18, resource: this.gBufferAlbedoTextureView },
-                { binding: 19, resource: this.dummyTextureView },
-                { binding: 20, resource: { buffer: this.dummyBuffer } },
-                { binding: 21, resource: this.ssaoPass.blurredTextureView },
-            ]
-        });
+    protected override addToGraphShading(graph: RenderGraph, handles: GBufferHandles) {
+        graph.addPass("Forward+ Shading")
+            .readTexture(handles.position)
+            .readTexture(handles.normal)
+            .readTexture(handles.albedo)
+            .readTexture(handles.ssao)
+            .readTexture(handles.depth)
+            .writeTexture(handles.sceneColor)
+            .execute((encoder, pass) => {
+                this.createShadingBindGroup();
+                
+                const shadingStaticBindGroup = renderer.device.createBindGroup({
+                    label: "shading static bind group",
+                    layout: this.shadingStaticBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.camera.uniformsBuffer }},
+                        { binding: 1, resource: { buffer: this.lights.lightSetStorageBuffer }},
+                        { binding: 2, resource: { buffer: this.tileOffsetsDeviceBuffer }},
+                        { binding: 3, resource: { buffer: this.globalLightIndicesDeviceBuffer }},
+                        { binding: 4, resource: { buffer: this.clusterSetDeviceBuffer }},
+                        { binding: 5, resource: this.stageEnv.irradianceMapView },
+                        { binding: 6, resource: this.stageEnv.prefilteredMapView },
+                        { binding: 7, resource: this.stageEnv.brdfLutView },
+                        { binding: 8, resource: this.stageEnv.envSampler },
+                        { binding: 9, resource: { buffer: this.stage.sunLightBuffer } },
+                        { binding: 10, resource: this.vsm.physicalAtlasView },
+                        { binding: 11, resource: this.vsm.shadowComparisonSampler },
+                        { binding: 12, resource: { buffer: this.vsm.pageTableBuffer } },
+                        { binding: 13, resource: { buffer: this.vsm.vsmUniformBuffer } },
+                        { binding: 14, resource: this.dummyTextureView },
+                        { binding: 15, resource: { buffer: this.dummyBuffer } },
+                        { binding: 16, resource: pass.getTextureView(handles.position) },
+                        { binding: 17, resource: pass.getTextureView(handles.normal) },
+                        { binding: 18, resource: pass.getTextureView(handles.albedo) },
+                        { binding: 19, resource: this.dummyTextureView },
+                        { binding: 20, resource: { buffer: this.dummyBuffer } },
+                        { binding: 21, resource: pass.getTextureView(handles.ssao) },
+                    ]
+                });
 
-        const shadingRenderPass = encoder.beginRenderPass({
-            label: "Shading Pass",
-            colorAttachments: [ { view: canvasTextureView, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" } ],
-            depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
-        });
-        // Opaque queue
-        shadingRenderPass.setBindGroup(0, shadingStaticBindGroup);
-        shadingRenderPass.setBindGroup(3, this.giDynamicBindGroup);
-        
-        let currentPipeline: GPURenderPipeline | null = null;
-        
-        this.scene.iterate(mr => {
-            shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
-        }, material => {
-            const pipeline = this.getOrCreateShadingPipeline(material.type, true);
-            if (currentPipeline !== pipeline) {
-                shadingRenderPass.setPipeline(pipeline);
-                currentPipeline = pipeline;
-            }
-            shadingRenderPass.setBindGroup(2, material.materialBindGroup);
-        }, primitive => {
-            shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
-            shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-            shadingRenderPass.drawIndexed(primitive.numIndices);
-        }, true);
+                const shadingRenderPass = encoder.beginRenderPass({
+                    label: "Shading Pass",
+                    colorAttachments: [ { view: pass.getTextureView(handles.sceneColor), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" } ],
+                    depthStencilAttachment: { view: pass.getTextureView(handles.depth), depthReadOnly: true }
+                });
+                // Opaque queue
+                shadingRenderPass.setBindGroup(0, shadingStaticBindGroup);
+                shadingRenderPass.setBindGroup(3, this.giDynamicBindGroup);
+                
+                let currentPipeline: GPURenderPipeline | null = null;
+                
+                this.scene.iterate(mr => {
+                    shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
+                }, material => {
+                    const pipeline = this.getOrCreateShadingPipeline(material.type, true);
+                    if (currentPipeline !== pipeline) {
+                        shadingRenderPass.setPipeline(pipeline);
+                        currentPipeline = pipeline;
+                    }
+                    shadingRenderPass.setBindGroup(2, material.materialBindGroup);
+                }, primitive => {
+                    shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
+                    shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                    shadingRenderPass.drawIndexed(primitive.numIndices);
+                }, true);
 
-        // Alpha-cutout queue
-        currentPipeline = null;
-        this.scene.iterate(mr => {
-            shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
-        }, material => {
-            const pipeline = this.getOrCreateShadingPipeline(material.type, false);
-            if (currentPipeline !== pipeline) {
-                shadingRenderPass.setPipeline(pipeline);
-                currentPipeline = pipeline;
-            }
-            shadingRenderPass.setBindGroup(2, material.materialBindGroup);
-        }, primitive => {
-            shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
-            shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-            shadingRenderPass.drawIndexed(primitive.numIndices);
-        }, false);
-        shadingRenderPass.end();
+                // Alpha-cutout queue
+                currentPipeline = null;
+                this.scene.iterate(mr => {
+                    shadingRenderPass.setBindGroup(1, mr.modelBindGroup!);
+                }, material => {
+                    const pipeline = this.getOrCreateShadingPipeline(material.type, false);
+                    if (currentPipeline !== pipeline) {
+                        shadingRenderPass.setPipeline(pipeline);
+                        currentPipeline = pipeline;
+                    }
+                    shadingRenderPass.setBindGroup(2, material.materialBindGroup);
+                }, primitive => {
+                    shadingRenderPass.setVertexBuffer(0, primitive.vertexBuffer);
+                    shadingRenderPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                    shadingRenderPass.drawIndexed(primitive.numIndices);
+                }, false);
+                shadingRenderPass.end();
+            });
     }
 
     private getOrCreateShadingPipeline(materialType: string, isOpaque: boolean): GPURenderPipeline {

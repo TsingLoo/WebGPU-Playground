@@ -1,5 +1,4 @@
 import * as renderer from '../renderer';
-import { RenderTexManager, RenderResource } from '../engine/RenderTexManager';
 import { RenderGraph } from '../engine/RenderGraph';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
@@ -14,6 +13,16 @@ import { DDGIDebugPass } from './passes/ddgi_debug_pass';
 import { ClusteringPass } from './passes/clustering_pass';
 import { HiZPass } from './passes/hiz_pass';
 import { SSRPass } from './passes/ssr_pass';
+
+export interface GBufferHandles {
+    albedo: import('../engine/RenderGraph').ResourceHandle;
+    normal: import('../engine/RenderGraph').ResourceHandle;
+    position: import('../engine/RenderGraph').ResourceHandle;
+    specular: import('../engine/RenderGraph').ResourceHandle;
+    depth: import('../engine/RenderGraph').ResourceHandle;
+    sceneColor: import('../engine/RenderGraph').ResourceHandle;
+    ssao: import('../engine/RenderGraph').ResourceHandle;
+}
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
     // These views will be dynamically updated each frame by the RenderGraph
@@ -196,7 +205,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 1. Stage Data Update Pass
         graph.addPass("Stage Updates")
-            .execute((_, pass) => {
+            .execute((_, _pass) => {
                 this.stage.updateSunLight();
             });
 
@@ -258,14 +267,16 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         // 2.5 Hi-Z Generation
         graph.addPass("HiZ")
             .readTexture(depthHandle)
-            .execute((enc, pass) => {
+            .execute((enc, _pass) => {
                 this.hizPass.execute(enc, this.depthTextureView);
             });
+
+        const hizHandle = graph.importTexture("HiZ_Import", this.hizPass.hizFullTextureView);
 
         // 3. VSM Shadow Map Pass
         graph.addPass("Shadow Map")
             .readTexture(depthHandle)
-            .execute((enc, pass) => {
+            .execute((enc, _pass) => {
                 this.stage.renderShadowMap(enc, this.depthTextureView);
             });
 
@@ -333,7 +344,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         // 5. GI Updates & 6. Clustering
         graph.addPass("GI & Clustering")
-            .execute((enc, pass) => {
+            .execute((enc, _pass) => {
                 if (this.stage.ddgi.enabled) {
                     this.stage.ddgi.update(
                         enc, 
@@ -356,52 +367,41 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 this.clusteringPass.execute(enc);
             });
 
-        // 7. Shading & Post-Process Stack
-        graph.addPass("Shading Stack")
-            .readTexture(depthHandle)
-            .readTexture(albedoHandle)
-            .readTexture(normalHandle)
-            .readTexture(positionHandle)
-            .readTexture(specularHandle)
-            .writeTexture(sceneColorHandle)
-            .writeTexture(canvasHandle)
-            .execute((enc, pass) => {
-                this.sceneColorTextureView = pass.getTextureView(sceneColorHandle);
+        const ssaoHandle = this.ssaoPass.addToGraph(graph, this.stage.ssao.enabled, hizHandle, normalHandle);
 
-                this.createShadingBindGroup();
-                this.ssaoPass.execute(enc, this.stage.ssao.enabled, this.hizPass.hizFullTextureView, this.gBufferNormalTextureView);
-                this.executeShadingPass(enc, this.sceneColorTextureView);
-                this.skyboxPass.execute(enc, this.sceneColorTextureView, this.depthTextureView);
-                
-                this.ssrPass.execute(enc, this.stage.ssr.enabled, this.geometryBindGroup, 
-                    this.sceneColorTextureView, 
-                    this.gBufferAlbedoTextureView, 
-                    this.gBufferNormalTextureView,
-                    this.gBufferSpecularTextureView,
-                    this.depthTextureView,
-                    this.hizPass.hizFullTextureView,
-                    canvasTextureView);
+        this.addToGraphShading(graph, { depth: depthHandle, albedo: albedoHandle, normal: normalHandle, position: positionHandle, specular: specularHandle, sceneColor: sceneColorHandle, ssao: ssaoHandle });
 
-                if (this.stage.sunVolumetricEnabled) {
-                    this.volumetricPass.execute(enc, canvasTextureView, this.depthTextureView);
-                }
+        graph.addPass("Skybox & Debug")
+             .readTexture(sceneColorHandle)
+             .readTexture(depthHandle)
+             .execute((enc, pass) => {
+                 const colorView = pass.getTextureView(sceneColorHandle);
+                 const depthView = pass.getTextureView(depthHandle);
+                 this.skyboxPass.execute(enc, colorView, depthView);
 
-                if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
-                    const isDDGI = this.stage.ddgi.enabled;
-                    const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
-                    const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
-                    const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
-                    this.debugPass.execute(enc, canvasTextureView, this.depthTextureView, this.geometryBindGroup, minPos, maxPos, color);
-                }
+                 if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
+                     const isDDGI = this.stage.ddgi.enabled;
+                     const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
+                     const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
+                     const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
+                     this.debugPass.execute(enc, canvasTextureView, depthView, this.geometryBindGroup, minPos, maxPos, color);
+                 }
 
-                if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
-                    this.ddgiDebugPass.execute(enc, canvasTextureView, this.depthTextureView, {
-                        cameraBindGroupLayout: this.geometryBindGroupLayout,
-                        cameraBindGroup: this.geometryBindGroup,
-                        ddgi: this.stage.ddgi
-                    });
-                }
-            });
+                 if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
+                     this.ddgiDebugPass.execute(enc, canvasTextureView, depthView, {
+                         cameraBindGroupLayout: this.geometryBindGroupLayout,
+                         cameraBindGroup: this.geometryBindGroup,
+                         ddgi: this.stage.ddgi
+                     });
+                 }
+             });
+
+        this.ssrPass.addToGraph(graph, this.stage.ssr.enabled, this.geometryBindGroup, sceneColorHandle, albedoHandle, normalHandle, specularHandle, depthHandle, hizHandle, canvasHandle);
+
+        // 12. Volumetric lighting
+        if (this.stage.sunVolumetricEnabled) {
+            this.volumetricPass.addToGraph(graph, canvasHandle, depthHandle);
+        }
 
         // Compile and execute the RenderGraph!
         graph.execute(encoder);
@@ -411,7 +411,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
     // Sub-classes implement these
     protected abstract createShadingBindGroup(): void;
-    protected abstract executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView): void;
+    protected abstract addToGraphShading(graph: RenderGraph, handles: GBufferHandles): void;
 
     // ==== Dynamic Pipeline Caches ====
 
