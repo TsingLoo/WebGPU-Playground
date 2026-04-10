@@ -44,12 +44,13 @@ fn compositeAndTonemap(
     diffuseAmbient: vec3f,
     specularIBL: vec3f,
     ao: f32,
+    emissive: vec3f,
     isGIActive: bool
 ) -> vec3f {
     // Scale down specular IBL when GI is active to avoid double-counting
     let specIBLScale = select(0.6, 0.0, isGIActive);
     let ambient = (kD * diffuseAmbient + specularIBL * specIBLScale) * ao;
-    let finalColor = ambient + Lo;
+    let finalColor = ambient + Lo + emissive;
 
     // Reinhard tone mapping
     let mapped = finalColor / (finalColor + vec3f(1.0));

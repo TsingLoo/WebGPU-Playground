@@ -501,7 +501,7 @@ export class Scene {
         }
 
         let sceneMaterials: Material[] = [];
-        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 16); // 16 floats per material (64 bytes)
+        let materialDataArray: Float32Array = new Float32Array(Math.max(1, (gltf.materials?.length ?? 0)) * 20); // 20 floats per material (80 bytes)
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
         let defaultMetallic = 0.0;
@@ -509,14 +509,14 @@ export class Scene {
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
                 let gltfMaterial = gltf.materials[i];
-                let currentMat = new Material(i, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
+                let currentMat = new Material(i, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, sceneTexturesSRGB, defaultTextureSRGB, defaultTextureLinear);
                 // TEST: Assign the 'unlit' variant to the Lion
                 if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
                     currentMat.type = "unlit";
                 }
                 sceneMaterials.push(currentMat);
                 
-                // Pack for global materials buffer (16 floats)
+                // Pack for global materials buffer (20 floats)
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
@@ -533,7 +533,7 @@ export class Scene {
                 let emissiveStrength = emissiveExt?.emissiveStrength ?? 1.0;
 
                 let texLayer = -1; // No texture layer lookup in the old scene path
-                const base = i * 16;
+                const base = i * 20;
 
                 // r0: albedo.rgb, alpha
                 materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
@@ -553,11 +553,20 @@ export class Scene {
                 materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
                 materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
 
-                // r3: normal_tex_layer, mr_tex_layer, pad, pad
+                // r3: normal_tex_layer, mr_tex_layer, alpha_cutoff, alpha_mode
                 new Int32Array(materialDataArray.buffer, (base + 12) * 4, 1)[0] = -1;
                 new Int32Array(materialDataArray.buffer, (base + 13) * 4, 1)[0] = -1;
-                materialDataArray[base + 14] = 0.0;
-                materialDataArray[base + 15] = 0.0;
+                materialDataArray[base + 14] = gltfMaterial.alphaCutoff ?? 0.5;
+                let alphaModeEnum = 0; // OPAQUE
+                if (gltfMaterial.alphaMode === "MASK") alphaModeEnum = 1;
+                else if (gltfMaterial.alphaMode === "BLEND") alphaModeEnum = 2;
+                materialDataArray[base + 15] = alphaModeEnum;
+
+                // r4: emissive_tex_layer, pad, pad, pad
+                new Int32Array(materialDataArray.buffer, (base + 16) * 4, 1)[0] = -1;
+                materialDataArray[base + 17] = 0.0;
+                materialDataArray[base + 18] = 0.0;
+                materialDataArray[base + 19] = 0.0;
             }
         }
 

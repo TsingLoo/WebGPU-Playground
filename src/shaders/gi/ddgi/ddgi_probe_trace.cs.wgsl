@@ -8,12 +8,13 @@
 @group(0) @binding(4) var<storage, read> bvhPositions: array<vec4f>;
 @group(0) @binding(5) var<storage, read> bvhIndices: array<vec4u>;
 
-// Materials buffer: 4 × vec4f = 16 floats per material entry
+// Materials buffer: 5 × vec4f = 20 floats per material entry
 // Layout per material:
 //   r0 = [baseColor.rgba]
 //   r1 = [roughness, metallic, texLayer(i32 bits), transmission]
 //   r2 = [ior, emissive.rgb]
-//   r3 = [normalTexLayer(i32 bits), mrTexLayer(i32 bits), pad, pad]
+//   r3 = [normal_tex_layer(i32), mr_tex_layer(i32), alpha_cutoff, alpha_mode]
+//   r4 = [emissive_tex_layer(i32), pad, pad, pad]
 @group(0) @binding(6) var<storage, read> materials: array<vec4f>;
 
 @group(0) @binding(7) var ddgiIrrAtlas: texture_2d<f32>;
@@ -91,10 +92,13 @@ fn main(
     if (hit.didHit) {
         hitDist = hit.dist;
         let matId = hit.indices.w;
-        // Unpack material from raw vec4f buffer (4 vec4fs per material)
-        let matBase = u32(matId) * 4u;
+        // Unpack material from raw vec4f buffer (5 vec4fs per material = 20 floats)
+        let matBase = u32(matId) * 5u;
         let r0 = materials[matBase + 0u]; // baseColor.rgba
         let r1 = materials[matBase + 1u]; // roughness, metallic, texLayer(bits), transmission
+        let r2 = materials[matBase + 2u]; // ior, emissive.rgb
+        let r3 = materials[matBase + 3u]; // normal, mr, alpha cutoff, alpha mode
+        let r4 = materials[matBase + 4u]; // emissive map, pad, pad, pad
         
         let pos = probeWorldPos + rotatedDir * hitDist;
         // Convert to properly outward-facing geometric normal

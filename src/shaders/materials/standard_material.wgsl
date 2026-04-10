@@ -11,13 +11,16 @@ struct PBRParams {
     has_mr_texture: f32,
     has_normal_texture: f32,
     base_color_factor: vec4f,
-    _reserved: vec4f,
+    emissive_factor: vec3f,
+    has_emissive_texture: f32,
 }
 @group(${bindGroup_material}) @binding(2) var<uniform> pbrParams: PBRParams;
 @group(${bindGroup_material}) @binding(3) var metallicRoughnessTex: texture_2d<f32>;
 @group(${bindGroup_material}) @binding(4) var metallicRoughnessTexSampler: sampler;
 @group(${bindGroup_material}) @binding(5) var normalTex: texture_2d<f32>;
 @group(${bindGroup_material}) @binding(6) var normalTexSampler: sampler;
+@group(${bindGroup_material}) @binding(7) var emissiveTex: texture_2d<f32>;
+@group(${bindGroup_material}) @binding(8) var emissiveTexSampler: sampler;
 
 struct SurfaceData {
     albedo: vec3f,
@@ -25,6 +28,7 @@ struct SurfaceData {
     metallic: f32,
     roughness: f32,
     N: vec3f,
+    emissive: vec3f,
     shadingModelId: f32, // SHADING_MODEL_PBR, SHADING_MODEL_UNLIT, etc.
 }
 
@@ -69,6 +73,14 @@ fn evaluateMaterial(uv: vec2f, geometryNormal: vec3f, tangentWorld: vec4f) -> Su
         N = normalize(tbn * tangentNormal);
     }
     surf.N = N;
+
+    // 4. Emissive Mapping
+    surf.emissive = pbrParams.emissive_factor;
+    if (pbrParams.has_emissive_texture > 0.5) {
+        let emissiveColor = textureSample(emissiveTex, emissiveTexSampler, uv).rgb;
+        surf.emissive = surf.emissive * emissiveColor;
+    }
+
     surf.shadingModelId = SHADING_MODEL_PBR;
 
     return surf;

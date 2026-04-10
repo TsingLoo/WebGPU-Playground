@@ -47,6 +47,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                 { binding: 21, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } },
                 { binding: 22, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 23, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } },
+                { binding: 24, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "unfilterable-float" } },
             ]
         });
 
@@ -155,6 +156,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
             .readTexture(handles.specular)
             .readTexture(handles.depth)
             .readTexture(handles.ssao)
+            .readTexture(handles.emissive)
             .writeTexture(shadingOutputHandle)
             .execute((shadingComputePass, pass) => {
                 this.createShadingBindGroup();
@@ -187,6 +189,7 @@ export class ClusteredDeferredRenderer extends BaseSceneRenderer {
                         { binding: 21, resource: this.dummyTextureView },
                         { binding: 22, resource: { buffer: this.dummyBuffer } },
                         { binding: 23, resource: pass.getTextureView(handles.ssao) },
+                        { binding: 24, resource: pass.getTextureView(handles.emissive) },
                     ]
                 });
 

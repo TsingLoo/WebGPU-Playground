@@ -75,7 +75,7 @@ export class Material {
 
     materialBindGroup: GPUBindGroup;
 
-    constructor(materialId: number, gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
+    constructor(materialId: number, gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], texturesEmissive: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
         this.id = materialId;
         this.isOpaque = (gltfMaterial.alphaMode !== 'MASK' && gltfMaterial.alphaMode !== 'BLEND');
 
@@ -96,12 +96,18 @@ export class Material {
         const metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? 1.0;
         const baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? [1.0, 1.0, 1.0, 1.0];
 
+        // Emissive texture uses sRGB or linear (typically sRGB)
+        const emissiveTexIndex = (gltfMaterial as any).emissiveTexture?.index;
+        const emissiveTexture = (emissiveTexIndex != null && emissiveTexIndex < texturesEmissive.length) ? texturesEmissive[emissiveTexIndex] : defaultTextureSRGB;
+
         // Flag: does this material have a metallic-roughness texture?
         const hasMRTexture = (mrTexIndex != null && mrTexIndex < texturesLinear.length) ? 1.0 : 0.0;
         const hasNormalTexture = (normalTexIndex != null && normalTexIndex < texturesLinear.length) ? 1.0 : 0.0;
-
-
-        // vec4f[2]: reserved
+        const hasEmissiveTexture = (emissiveTexIndex != null && emissiveTexIndex < texturesEmissive.length) ? 1.0 : 0.0;
+        
+        const emissiveFactor: number[] = (gltfMaterial as any).emissiveFactor ?? [0.0, 0.0, 0.0];
+        const emissiveStrengthExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
+        const emissiveStrength: number = emissiveStrengthExt?.emissiveStrength ?? 1.0;
         
         // Allocate 48 bytes (3 vec4f). UniformPool handles 256-byte alignment internally if we set size carefully, 
         // wait, UniformPool.allocate aligns by 256, so allocating 48 gives us a 256-stride chunk which is safe.
@@ -109,12 +115,12 @@ export class Material {
         poolAlloc.view.set([
             roughness, metallic, hasMRTexture, hasNormalTexture,
             baseColorFactor[0], baseColorFactor[1], baseColorFactor[2], baseColorFactor[3],
-            0.0, 0.0, 0.0, 0.0
+            emissiveFactor[0] * emissiveStrength, emissiveFactor[1] * emissiveStrength, emissiveFactor[2] * emissiveStrength, hasEmissiveTexture
         ]);
         globalUniformPool.markDirty(poolAlloc.offset, poolAlloc.sizeBytes);
 
         // Compute a deterministic cache key for this material bind group
-        const cacheKey = `mat_${roughness.toFixed(2)}_${metallic.toFixed(2)}_${texIndex}_${mrTexIndex}_${normalTexIndex}_${baseColorFactor.join(',')}`;
+        const cacheKey = `mat_${roughness.toFixed(2)}_${metallic.toFixed(2)}_${texIndex}_${mrTexIndex}_${normalTexIndex}_${emissiveTexIndex}_${baseColorFactor.join(',')}_${emissiveFactor.join(',')}`;
 
         this.materialBindGroup = bindGroupAllocator.getBindGroup(device, {
             label: `material bind group ${materialId}`,
@@ -151,6 +157,14 @@ export class Material {
                 {
                     binding: 6,
                     resource: normalTexture.sampler
+                },
+                {
+                    binding: 7,
+                    resource: emissiveTexture.image.createView()
+                },
+                {
+                    binding: 8,
+                    resource: emissiveTexture.sampler
                 }
             ]
         }, cacheKey);
@@ -459,6 +473,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         // Build sRGB and linear image arrays from all images
         let sceneTexturesSRGB: Texture[] = [];  // for baseColor (sRGB encoded)
         let sceneTexturesLinear: Texture[] = []; // for metallic-roughness (linear data)
+        let sceneTexturesEmissive: Texture[] = sceneTexturesSRGB; // for emissive
         {
             let sceneImagesSRGB: GPUTexture[] = [];
             let sceneImagesLinear: GPUTexture[] = [];
@@ -617,7 +632,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
                 let gltfMaterial = gltf.materials[i];
-                let currentMat = new Material(i + matOffset, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
+                let currentMat = new Material(i + matOffset, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, sceneTexturesEmissive, defaultTextureSRGB, defaultTextureLinear);
                 // TEST: Assign the 'unlit' variant to the Lion
                 if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
                     currentMat.type = "unlit";
