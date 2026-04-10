@@ -22,6 +22,7 @@ export interface GBufferHandles {
     depth: import('../engine/RenderGraph').ResourceHandle;
     sceneColor: import('../engine/RenderGraph').ResourceHandle;
     ssao: import('../engine/RenderGraph').ResourceHandle;
+    emissive: import('../engine/RenderGraph').ResourceHandle;
 }
 
 export abstract class BaseSceneRenderer extends renderer.Renderer {
@@ -33,6 +34,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     gBufferNormalTextureView!: GPUTextureView;
     gBufferPositionTextureView!: GPUTextureView;
     gBufferSpecularTextureView!: GPUTextureView;
+    gBufferEmissiveTextureView!: GPUTextureView;
 
     tileOffsetsDeviceBuffer: GPUBuffer;
     globalLightIndicesDeviceBuffer: GPUBuffer;
@@ -225,6 +227,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         const normalHandle = graph.createTexture("GBufferNormal", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
         const positionHandle = graph.createTexture("GBufferPosition", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
         const specularHandle = graph.createTexture("GBufferSpecular", { format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const emissiveHandle = graph.createTexture("GBufferEmissive", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
 
         // 1. Stage Data Update Pass
         graph.addGenericPass("Stage Updates")
@@ -304,6 +307,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             .addColorAttachment(normalHandle, { clearValue: [0,0,0,0] })
             .addColorAttachment(positionHandle, { clearValue: [0,0,0,0] })
             .addColorAttachment(specularHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(emissiveHandle, { clearValue: [0,0,0,0] })
             .setDepthStencilAttachment(depthHandle, { depthReadOnly: true })
             .execute((gBufferPass, pass) => {
                 // Bridge views (legacy support)
@@ -311,6 +315,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                 this.gBufferNormalTextureView = pass.getTextureView(normalHandle);
                 this.gBufferPositionTextureView = pass.getTextureView(positionHandle);
                 this.gBufferSpecularTextureView = pass.getTextureView(specularHandle);
+                this.gBufferEmissiveTextureView = pass.getTextureView(emissiveHandle);
                 gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
 
                 // Opaque queue
@@ -382,7 +387,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         const ssaoHandle = this.ssaoPass.addToGraph(graph, this.stage.ssao.enabled, hizHandle, normalHandle);
 
-        this.addToGraphShading(graph, { depth: depthHandle, albedo: albedoHandle, normal: normalHandle, position: positionHandle, specular: specularHandle, sceneColor: sceneColorHandle, ssao: ssaoHandle });
+        this.addToGraphShading(graph, { depth: depthHandle, albedo: albedoHandle, normal: normalHandle, position: positionHandle, specular: specularHandle, sceneColor: sceneColorHandle, ssao: ssaoHandle, emissive: emissiveHandle });
 
         graph.addRenderPass("Skybox & Debug")
              .addColorAttachment(sceneColorHandle)
@@ -468,6 +473,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                     { format: 'rgba16float' }, // normal
                     { format: 'rgba16float' }, // position
                     { format: 'rgba8unorm' },  // specular
+                    { format: 'rgba16float' }, // emissive
                 ]
             },
             primitive: { topology: 'triangle-list', cullMode: 'none' }

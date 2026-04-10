@@ -13,6 +13,7 @@ struct GBufferOutput {
     @location(1) normal : vec4f,
     @location(2) position : vec4f,
     @location(3) specular_material : vec4f,
+    @location(4) emissive_material : vec4f,
 }
 
 @fragment
@@ -32,6 +33,7 @@ fn main(in: FragmentInput) ->  GBufferOutput
 
     // Store PBR params: R=roughness, G=metallic, B=ao, A=shadingModelId
     output.specular_material = vec4f(surf.roughness, surf.metallic, ao, surf.shadingModelId);
+    output.emissive_material = vec4f(surf.emissive, 0.0);
     
     return output;
 }

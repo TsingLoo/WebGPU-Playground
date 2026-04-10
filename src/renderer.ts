@@ -84,12 +84,13 @@ export async function initWebGPU() {
         throw new Error("no appropriate GPUAdapter found");
     }
 
+    const requiredLimits: Record<string, number> = {};
+    for (const key in adapter.limits) {
+        requiredLimits[key] = (adapter.limits as any)[key];
+    }
+
     device = await adapter.requestDevice({
-        requiredLimits: {
-            maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-            maxBufferSize: adapter.limits.maxBufferSize,
-            maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
-        }
+        requiredLimits: requiredLimits
     });
 
     context = canvas.getContext("webgpu")!;
@@ -150,6 +151,16 @@ export async function initWebGPU() {
             },
             { // normalTexSampler
                 binding: 6,
+                visibility: GPUShaderStage.FRAGMENT,
+                sampler: {}
+            },
+            { // emissiveTex
+                binding: 7,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: {}
+            },
+            { // emissiveTexSampler
+                binding: 8,
                 visibility: GPUShaderStage.FRAGMENT,
                 sampler: {}
             }

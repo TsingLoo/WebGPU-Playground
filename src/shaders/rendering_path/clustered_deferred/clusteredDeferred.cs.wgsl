@@ -38,6 +38,8 @@
 // SSAO binding
 @group(${bindGroup_scene}) @binding(23) var ssaoTex: texture_2d<f32>;
 
+@group(${bindGroup_scene}) @binding(24) var emissiveTex: texture_2d<f32>;
+
 // Shared memory for tile light indices — pre-loaded by thread 0 of each workgroup
 const MAX_SHARED_LIGHTS: u32 = ${maxLightsPerCluster}u;
 var<workgroup> sharedLightCount: u32;
@@ -86,6 +88,7 @@ fn main(
     let pos_world = textureLoad(positionTex, fragcoordi, 0).xyz;
     let nor_world = textureLoad(normalTex, fragcoordi, 0).xyz;
     let specularData = textureLoad(specularTex, fragcoordi, 0);
+    let emissiveData = textureLoad(emissiveTex, fragcoordi, 0).rgb;
     
     let roughness = max(specularData.r, 0.04);
     let metallic = specularData.g;
@@ -171,7 +174,7 @@ fn main(
 
     // Composite and tone map (shared)
     let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
-    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, isGIActive);
+    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, emissiveData, isGIActive);
 
     textureStore(outputTex, fragcoordi, vec4f(corrected, 1.0));
 }
