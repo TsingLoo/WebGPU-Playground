@@ -36,12 +36,28 @@ await initWebGPU();
 setupLoaders();
 
 let scene = new Scene();
-//const gltfResult = await loadGltf('./scenes/DamagedHelmet.glb', scene.materialCount, scene.layerCount);
-const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
-//const gltfResult = await loadGltf('./scenes/san-miguel/san-miguel.gltf', scene.materialCount, scene.layerCount);
+const urlParams = new URLSearchParams(window.location.search);
+const sceneParam = urlParams.get('scene') ?? 'sponza';
 
-scene.root.addChild(gltfResult.rootEntity);
-await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.normalMapImages, gltfResult.mrImages, gltfResult.emissiveImages, gltfResult.baseColorImages.length);
+// Always load Sponza as the base environment
+const sponzaResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
+scene.root.addChild(sponzaResult.rootEntity);
+await scene.mergeMaterialAndTextures(device, sponzaResult.materialDataArray, sponzaResult.materialCount, sponzaResult.baseColorImages, sponzaResult.normalMapImages, sponzaResult.mrImages, sponzaResult.emissiveImages, sponzaResult.baseColorImages.length);
+
+// If glass_sphere is requested, append it!
+if (sceneParam === 'glass_sphere') {
+    const sphereResult = await loadGltf('./scenes/glass_sphere/glass_sphere.gltf', scene.materialCount, scene.layerCount);
+    // Position the glass sphere in the middle of Sponza!
+    sphereResult.rootEntity.position = [0, 4, 0];
+    sphereResult.rootEntity.scale = [4, 4, 4];
+    scene.root.addChild(sphereResult.rootEntity);
+    await scene.mergeMaterialAndTextures(device, sphereResult.materialDataArray, sphereResult.materialCount, sphereResult.baseColorImages, sphereResult.normalMapImages, sphereResult.mrImages, sphereResult.emissiveImages, sphereResult.baseColorImages.length);
+} else if (sceneParam === 'helmet') {
+    const helmetResult = await loadGltf('./scenes/DamagedHelmet.glb', scene.materialCount, scene.layerCount);
+    scene.root.addChild(helmetResult.rootEntity);
+    await scene.mergeMaterialAndTextures(device, helmetResult.materialDataArray, helmetResult.materialCount, helmetResult.baseColorImages, helmetResult.normalMapImages, helmetResult.mrImages, helmetResult.emissiveImages, helmetResult.baseColorImages.length);
+}
+
 scene.bvhData = buildBVHFromScene(scene.root);
 
 const voxelResult = buildVoxelGrid(scene.root);

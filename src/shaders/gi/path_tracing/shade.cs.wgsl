@@ -107,7 +107,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // ============================================================
     // Material evaluation
     // ============================================================
-    let mat = unpackPTMaterial(&materials, hit.mat_id);
+    var mat = unpackPTMaterial(&materials, hit.mat_id);
 
     var albedo = mat.albedo;
     var final_alpha = mat.alpha;
@@ -224,9 +224,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         }
     }
 
-    // =================================================================
-    // Glass / Transmissive
-    // =================================================================
     if (mat.transmission > 0.5) {
         if (is_spectral) {
             // Spectral dispersion path
@@ -246,23 +243,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             let eta_hero_out = eta_out[0];
 
             var new_dir: vec3f;
+            var new_ior: f32;
             if (rand(&rng) < F_hero) {
                 new_dir = reflect(-V, N);
+                new_ior = ray.ior;
             } else {
                 let eta = eta_hero_in / eta_hero_out;
-                let refracted = refract(-V, N * hit.side, eta);
+                let refracted = refract(-V, N, eta);
                 if (all(refracted == vec3f(0.0))) {
                     new_dir = reflect(-V, N);
+                    new_ior = ray.ior;
                 } else {
                     new_dir = normalize(refracted);
-                    // Terminate secondary wavelengths that would go in different directions
-                    // (pbrt v4 TerminateSecondary approach)
+                    new_ior = eta_hero_out;
                     // For now, we weight the non-hero channels by their Fresnel ratio
                     for (var i = 1u; i < N_SPECTRAL_SAMPLES; i++) {
                         let eta_i = eta_in[i] / eta_out[i];
                         let sin2_t = eta_i * eta_i * (1.0 - cos_i * cos_i);
                         if (sin2_t >= 1.0) {
-                            // TIR for this wavelength — zero its contribution
                             spec_throughput[i] = 0.0;
                         }
                     }
@@ -276,7 +274,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             ray.throughput       = vec3f(1.0); // placeholder, unused in spectral mode
             ray.origin           = hit_pos + new_dir * 0.001;
             ray.direction        = new_dir;
-            ray.ior              = eta_hero_out;
+            ray.ior              = new_ior;
             ray.bounce          += 1u;
             ray.ray_active       = select(0u, 1u, ray.bounce < pt.max_bounces);
             ray.specular_bounce  = 1u;
@@ -297,7 +295,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                 new_ior = ray.ior;
             } else {
                 let eta       = eta_in / eta_out;
-                let refracted = refract(-V, N * hit.side, eta);
+                let refracted = refract(-V, N, eta);
                 if (all(refracted == vec3f(0.0))) {
                     new_dir = reflect(-V, N);
                     new_ior = ray.ior;

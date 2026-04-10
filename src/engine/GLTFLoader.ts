@@ -212,8 +212,13 @@ export class Primitive {
 
         const positionsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.POSITION);
         const normalsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.NORMAL);
-        const uvsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.TEXCOORD_0);
-
+        let uvsArray: Float32Array;
+        if (gltfPrim.attributes.TEXCOORD_0 != null) {
+            uvsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.TEXCOORD_0);
+        } else {
+            const numVerts = positionsArray.length / 3;
+            uvsArray = new Float32Array(numVerts * 2);
+        }
         // Load tangent data (vec4f: xyz = tangent direction, w = handedness +1/-1)
         let tangentsArray: Float32Array | null = null;
         if (gltfPrim.attributes.TANGENT != null) {
@@ -437,12 +442,28 @@ export async function loadGltfBuffer(buffer: ArrayBuffer, matOffset: number = 0,
 
 export async function loadGltf(filePath: string, matOffset: number = 0, layerOffset: number = 0): Promise<GLTFResult> {
     const gltfWithBuffers = await load(filePath) as GLTFWithBuffers;
+    if (filePath.endsWith('.gltf')) {
+        try {
+            const rawResponse = await fetch(filePath);
+            const rawJson = await rawResponse.json();
+            return processGltf(gltfWithBuffers, matOffset, layerOffset, rawJson);
+        } catch (e) {
+            console.warn("Failed to fetch raw JSON to restore extensions:", e);
+        }
+    }
     return processGltf(gltfWithBuffers, matOffset, layerOffset);
 }
 
-async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number): Promise<GLTFResult> {
+async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number, originalJSON?: any): Promise<GLTFResult> {
 
         const gltf = gltfWithBuffers.json;
+        if (originalJSON?.materials) {
+            for (let i = 0; i < gltf.materials.length; i++) {
+                if (originalJSON.materials[i].extensions) {
+                    gltf.materials[i].extensions = originalJSON.materials[i].extensions;
+                }
+            }
+        }
 
         // Create default white 1x1 textures (sRGB for baseColor, linear for MR)
         const defaultGpuTexSRGB = device.createTexture({
@@ -656,7 +677,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
 
                 // KHR_materials_transmission: transmissionFactor (0-1)
                 const transmissionExt = (gltfMaterial as any).extensions?.KHR_materials_transmission;
-                const transmission: number = transmissionExt?.transmissionFactor ?? 0.0;
+                let transmission: number = transmissionExt?.transmissionFactor ?? 0.0;
 
                 // KHR_materials_ior: IOR value (default 1.5 for glass)
                 const iorExt = (gltfMaterial as any).extensions?.KHR_materials_ior;
