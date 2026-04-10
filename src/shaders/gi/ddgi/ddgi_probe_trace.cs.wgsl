@@ -82,6 +82,9 @@ fn main(
     var ray: Ray;
     ray.origin = probeWorldPos;
     ray.direction = rotatedDir;
+    let safeDir = select(ray.direction, vec3f(1e-7), abs(ray.direction) < vec3f(1e-7));
+    ray.invDirection = 1.0 / safeDir;
+    ray.dirSign = vec3u(select(0u, 1u, safeDir.x < 0.0), select(0u, 1u, safeDir.y < 0.0), select(0u, 1u, safeDir.z < 0.0));
 
     let hit = bvhIntersectFirstHit(&bvhNodes, &bvhPositions, &bvhIndices, ray);
 

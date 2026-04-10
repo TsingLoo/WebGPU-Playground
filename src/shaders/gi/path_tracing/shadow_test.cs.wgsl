@@ -29,6 +29,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var bvh_ray: Ray;
     bvh_ray.origin    = shadow.origin;
     bvh_ray.direction = shadow.direction;
+    let safeDir = select(bvh_ray.direction, vec3f(1e-7), abs(bvh_ray.direction) < vec3f(1e-7));
+    bvh_ray.invDirection = 1.0 / safeDir;
+    bvh_ray.dirSign = vec3u(select(0u, 1u, safeDir.x < 0.0), select(0u, 1u, safeDir.y < 0.0), select(0u, 1u, safeDir.z < 0.0));
 
     var occluded = false;
 
