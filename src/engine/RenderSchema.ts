@@ -18,6 +18,7 @@ export const renderSchema: Record<string, ComponentConfig> = {
     'DirectionalLightComponent': {
         targetSystem: '',
         bindings: [
+            { compKey: 'enabled', stageKey: 'sunEnabled' },
             { compKey: 'intensity', stageKey: 'sunIntensity' },
             { compKey: 'direction', stageKey: 'sunDirection', transformSet: (v: any) => Array.from(v) },
             { compKey: 'color', stageKey: 'sunColor', transformSet: (v: any) => Array.from(v) }
@@ -47,7 +48,10 @@ export const renderSchema: Record<string, ComponentConfig> = {
             { compKey: 'heightScale', stageKey: 'sunVolumetricHeightScale' },
             { compKey: 'maxDist', stageKey: 'sunVolumetricMaxDist' },
             { compKey: 'steps', stageKey: 'sunVolumetricSteps' }
-        ]
+        ],
+        onUpdate: (stageObj: any) => {
+            stageObj.updateSunLight();
+        }
     },
     'VSMShadowComponent': {
         targetSystem: 'vsm',

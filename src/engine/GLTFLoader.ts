@@ -11,6 +11,7 @@ import { ImageLoader } from '@loaders.gl/images';
 import { mat4 } from 'wgpu-matrix';
 import { Entity } from './Entity';
 import { MeshRenderer } from './components/MeshRenderer';
+import { DirectionalLightComponent, PointLightComponent } from './components/LightComponent';
 import { device, globalUniformPool, materialBindGroupLayout } from '../renderer';
 import { bindGroupAllocator } from './BindGroupAllocator';
 
@@ -704,6 +705,10 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         sceneRoot.name = "scene root";
         // sceneRoot.setParent(this.root);
 
+        // Parse KHR_lights_punctual extension if present
+        const lightsExt = (gltf as any).extensions?.KHR_lights_punctual;
+        const gltfLights: any[] = lightsExt?.lights ?? [];
+
         let sceneNodes: Entity[] = [];
         for (let gltfNode of gltf.nodes!) {
             let newNode = new Entity();
@@ -715,6 +720,47 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 const mr = new MeshRenderer();
                 mr.setMesh(sceneMeshes[gltfNode.mesh]);
                 newNode.addComponent(mr);
+            }
+
+            // KHR_lights_punctual: attach light component if this node references a light
+            const nodeLightExt = (gltfNode as any).extensions?.KHR_lights_punctual;
+            if (nodeLightExt != null && nodeLightExt.light != null) {
+                const lightIdx = nodeLightExt.light;
+                if (lightIdx < gltfLights.length) {
+                    const gltfLight = gltfLights[lightIdx];
+                    const lightType: string = gltfLight.type; // 'directional' | 'point' | 'spot'
+                    const color: number[] = gltfLight.color ?? [1, 1, 1];
+                    const intensity: number = gltfLight.intensity ?? 1.0;
+
+                    if (lightType === 'directional') {
+                        const dirLight = new DirectionalLightComponent();
+                        // glTF directional lights shine down -Z in local space.
+                        // The node's transform will rotate this. We store the local-space default.
+                        dirLight.direction = [0, 0, -1];
+                        dirLight.color = [color[0], color[1], color[2]];
+                        dirLight.intensity = intensity;
+                        newNode.addComponent(dirLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Directional Light';
+                        console.log(`[GLTFLoader] Parsed directional light: ${newNode.name} (intensity=${intensity})`);
+                    } else if (lightType === 'point') {
+                        const ptLight = new PointLightComponent();
+                        ptLight.color = [color[0], color[1], color[2]];
+                        ptLight.intensity = intensity;
+                        ptLight.radius = gltfLight.range ?? 10.0;
+                        newNode.addComponent(ptLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Point Light';
+                        console.log(`[GLTFLoader] Parsed point light: ${newNode.name} (intensity=${intensity}, range=${ptLight.radius})`);
+                    } else if (lightType === 'spot') {
+                        // Treat spot lights as point lights for now (no spot support in engine)
+                        const ptLight = new PointLightComponent();
+                        ptLight.color = [color[0], color[1], color[2]];
+                        ptLight.intensity = intensity;
+                        ptLight.radius = gltfLight.range ?? 10.0;
+                        newNode.addComponent(ptLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Spot Light';
+                        console.log(`[GLTFLoader] Parsed spot light as point: ${newNode.name} (intensity=${intensity})`);
+                    }
+                }
             }
 
 

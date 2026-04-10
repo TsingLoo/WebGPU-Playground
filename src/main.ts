@@ -38,7 +38,7 @@ setupLoaders();
 let scene = new Scene();
 //const gltfResult = await loadGltf('./scenes/DamagedHelmet.glb', scene.materialCount, scene.layerCount);
 const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
-
+//const gltfResult = await loadGltf('./scenes/san-miguel/san-miguel.gltf', scene.materialCount, scene.layerCount);
 
 scene.root.addChild(gltfResult.rootEntity);
 await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.normalMapImages, gltfResult.mrImages, gltfResult.emissiveImages, gltfResult.baseColorImages.length);
@@ -75,42 +75,34 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     cameraEntity.addComponent(cameraComp);
     targetScene.root.addChild(cameraEntity);
 
+    // Sun directional light — owns its data directly.
+    // Stage reads from this component via scene.getDirectionalLight().
+    // NO applyComponentSchema here — that would replace instance props with stage-proxy
+    // getters, creating a circular dep since Stage reads from this component.
     const sunEntity = new Entity("Directional Light (Sun)");
     const sunComp = new DirectionalLightComponent();
-    sunComp.direction = stageObj.sunDirection;
-    sunComp.color = stageObj.sunColor;
-    applyComponentSchema(sunComp, 'DirectionalLightComponent', stageObj, globals);
-    // wire enabled to sunEnabled + trigger lighting sync
-    Object.defineProperty(sunComp, 'enabled', { 
-        get: () => stageObj.sunEnabled, 
-        set: (v) => { 
-            stageObj.sunEnabled = v; 
-            stageObj.updateSunLight();
-        }, 
-        enumerable: true 
-    });
     sunEntity.addComponent(sunComp);
 
     // VSM Shadow Component appended to Sun Entity
     const vsmComp = new VSMShadowComponent();
     applyComponentSchema(vsmComp, 'VSMShadowComponent', stageObj, globals);
-    // wire enabled to vsmEnabled + trigger lighting sync
-    Object.defineProperty(vsmComp, 'enabled', { 
-        get: () => stageObj.vsmEnabled, 
-        set: (v) => { 
-            stageObj.vsmEnabled = v; 
+    // VSM enabled → DirectionalLightComponent.shadowEnabled via Stage proxy
+    Object.defineProperty(vsmComp, 'enabled', {
+        get: () => stageObj.vsmEnabled,
+        set: (v) => {
+            stageObj.vsmEnabled = v;
             stageObj.updateSunLight();
-        }, 
-        enumerable: true 
+        },
+        enumerable: true
     });
     Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
     Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
     sunEntity.addComponent(vsmComp);
     targetScene.root.addChild(sunEntity);
 
+    // Volumetric fog — owns its data directly, same as DirectionalLight.
     const volEntity = new Entity("Global Volume (Fog)");
     const volComp = new VolumetricFogComponent();
-    applyComponentSchema(volComp, 'VolumetricFogComponent', stageObj, globals);
     volEntity.addComponent(volComp);
     targetScene.root.addChild(volEntity);
 
@@ -186,6 +178,9 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     applyComponentSchema(ssrComp, 'SSRComponent', stageObj, globals);
     ppEntity.addComponent(ssrComp);
     targetScene.root.addChild(ppEntity);
+
+    // Now that sun component exists, refresh the GPU buffer
+    stageObj.updateSunLight();
 }
 
 const stats = new Stats();

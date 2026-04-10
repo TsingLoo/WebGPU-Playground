@@ -17,16 +17,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
 @group(0) @binding(0) var<uniform>            pt:             PTUniforms;
 @group(0) @binding(1) var<storage, read>       sample_sum_buf: array<vec4f>;  // sum of all PT samples
 
-// ACES filmic tone mapping
-fn ACESFilm(x: vec3f) -> vec3f {
-    let a: f32 = 2.51;
-    let b: f32 = 0.03;
-    let c: f32 = 2.43;
-    let d: f32 = 0.59;
-    let e: f32 = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
-}
-
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4f) -> @location(0) vec4f {
     let render_width  = pt.width;
@@ -48,9 +38,9 @@ fn fs_main(@builtin(position) frag_pos: vec4f) -> @location(0) vec4f {
     let n = f32(max(pt.sample_count, 1u));
     let avg_radiance = radiance_sum / n;
 
-    // ACES tonemapping + gamma
-    let mapped = ACESFilm(avg_radiance);
-    let gamma_corrected = pow(max(mapped, vec3f(0.0)), vec3f(1.0 / 2.2));
+    // Reinhard tonemapping + gamma (matches clustered deferred pipeline)
+    let mapped = avg_radiance / (avg_radiance + vec3f(1.0));
+    let gamma_corrected = pow(mapped, vec3f(1.0 / 2.2));
 
     return vec4f(gamma_corrected, 1.0);
 }

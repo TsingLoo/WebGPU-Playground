@@ -3,6 +3,7 @@ import { Component } from './Component';
 import { BVHData } from '../stage/bvh_builder';
 import { Material, Primitive } from './GLTFLoader';
 import { MeshRenderer } from './components/MeshRenderer';
+import { DirectionalLightComponent, VolumetricFogComponent } from './components/LightComponent';
 
 type Constructor<T> = new (...args: any[]) => T;
 
@@ -70,6 +71,28 @@ export class Scene {
             return Array.from(set) as T[];
         }
         return [];
+    }
+
+    /**
+     * Returns the first DirectionalLightComponent in the scene, or null.
+     */
+    public getDirectionalLight(): DirectionalLightComponent | null {
+        const set = this.componentsCache.get(DirectionalLightComponent);
+        if (set && set.size > 0) {
+            return set.values().next().value as DirectionalLightComponent;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the first VolumetricFogComponent in the scene, or null.
+     */
+    public getVolumetricFog(): VolumetricFogComponent | null {
+        const set = this.componentsCache.get(VolumetricFogComponent);
+        if (set && set.size > 0) {
+            return set.values().next().value as VolumetricFogComponent;
+        }
+        return null;
     }
 
     /**

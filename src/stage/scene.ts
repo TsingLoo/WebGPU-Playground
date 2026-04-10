@@ -509,7 +509,7 @@ export class Scene {
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
                 let gltfMaterial = gltf.materials[i];
-                let currentMat = new Material(i, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, sceneTexturesSRGB, defaultTextureSRGB, defaultTextureLinear);
+                let currentMat = new Material(i, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
                 // TEST: Assign the 'unlit' variant to the Lion
                 if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
                     currentMat.type = "unlit";

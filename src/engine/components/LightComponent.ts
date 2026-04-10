@@ -5,6 +5,9 @@ export class DirectionalLightComponent extends Component {
     public direction: [number, number, number] = [-0.17, 0.27, 0.05];
     public color: [number, number, number] = [1.0, 0.95, 0.85];
     public intensity: number = 10.0;
+
+    // Shadow
+    public shadowEnabled: boolean = true;
 }
 
 export class VolumetricFogComponent extends Component {
