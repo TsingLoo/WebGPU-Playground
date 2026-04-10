@@ -16,8 +16,8 @@
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
+    let render_width  = pt.width;
+    let render_height = pt.height;
     if (gid.x >= render_width || gid.y >= render_height) { return; }
 
     let pixel_id = gid.y * render_width + gid.x;

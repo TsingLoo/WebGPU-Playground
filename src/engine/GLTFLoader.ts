@@ -576,7 +576,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         let materialDataArray: Float32Array = new Float32Array(materialCount * 16);
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
-        let defaultMetallic = 0.0;
+        let defaultMetallic = 1.0;  // glTF 2.0 spec default
 
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
@@ -619,8 +619,8 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 materialDataArray[base + 3] = baseColorFactor[3] ?? 1.0;
                 materialDataArray[base + 4] = roughness;
                 materialDataArray[base + 5] = metallic;
-                // Store i32 layer index as f32 bits for texture array lookup
-                new Int32Array(materialDataArray.buffer, (base + 6) * 4, 1)[0] = texLayer;
+                // Store layer index as plain f32 (avoids NaN issues with bitcast trick)
+                materialDataArray[base + 6] = texLayer;
                 materialDataArray[base + 7] = transmission;
                 materialDataArray[base + 8] = ior;
                 materialDataArray[base + 9]  = emissiveFactor[0] * emissiveStrength;
@@ -630,10 +630,10 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 if (gltfMaterial.alphaMode === "MASK") alphaModeEnum = 1;
                 else if (gltfMaterial.alphaMode === "BLEND") alphaModeEnum = 2;
 
-                new Int32Array(materialDataArray.buffer, (base + 12) * 4, 1)[0] = normalTexLayer;
-                new Int32Array(materialDataArray.buffer, (base + 13) * 4, 1)[0] = mrTexLayer;
+                materialDataArray[base + 12] = normalTexLayer;
+                materialDataArray[base + 13] = mrTexLayer;
                 materialDataArray[base + 14] = gltfMaterial.alphaCutoff ?? 0.5;
-                new Uint32Array(materialDataArray.buffer, (base + 15) * 4, 1)[0] = alphaModeEnum;
+                materialDataArray[base + 15] = alphaModeEnum;
             }
         }
 

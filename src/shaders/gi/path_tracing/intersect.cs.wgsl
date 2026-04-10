@@ -18,8 +18,8 @@ const MAX_ALPHA_SKIP = 16u;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
+    let render_width  = pt.width;
+    let render_height = pt.height;
     let total_pixels  = render_width * render_height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;

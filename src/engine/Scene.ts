@@ -159,10 +159,10 @@ export class Scene {
         const TEX_ARRAY_SIZE = 1024;
         const totalLayers = this.layerCount + newLayerCount;
 
-        const mergeTexArray = (label: string, oldArray: GPUTexture | null, oldLayers: number, newImages: GPUTexture[]): GPUTexture => {
+        const mergeTexArray = (label: string, oldArray: GPUTexture | null, oldLayers: number, newImages: GPUTexture[], format: GPUTextureFormat = 'rgba8unorm'): GPUTexture => {
             const tex = device.createTexture({
                 label, size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
-                format: 'rgba8unorm', dimension: '2d',
+                format: format, dimension: '2d',
                 usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
             });
             const enc = device.createCommandEncoder();
@@ -189,11 +189,11 @@ export class Scene {
         this.baseColorTexArray = mergeTexArray("BaseColor Array", this.baseColorTexArray, this.layerCount, newBaseColorImages);
         this.baseColorTexArrayView = this.baseColorTexArray.createView({ dimension: '2d-array' });
 
-        // --- Merge Normal Map Texture Array ---
+        // --- Merge Normal Map Texture Array (linear) ---
         this.normalMapTexArray = mergeTexArray("NormalMap Array", this.normalMapTexArray, this.layerCount, newNormalMapImages);
         this.normalMapTexArrayView = this.normalMapTexArray.createView({ dimension: '2d-array' });
 
-        // --- Merge MR Texture Array ---
+        // --- Merge MR Texture Array (linear) ---
         this.mrTexArray = mergeTexArray("MR Array", this.mrTexArray, this.layerCount, newMRImages);
         this.mrTexArrayView = this.mrTexArray.createView({ dimension: '2d-array' });
 

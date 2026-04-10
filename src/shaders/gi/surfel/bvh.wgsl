@@ -3,7 +3,9 @@
 
 const BVH_STACK_DEPTH = 60u;
 const INFINITY = 1e20;
-const TRI_INTERSECT_EPSILON = 1e-5;
+// Reduced from 1e-5 to 1e-8 to allow intersection with very small triangles 
+// (e.g. detailed glTF models like the chess pieces) without returning false-negative misses.
+const TRI_INTERSECT_EPSILON = 1e-8;
 
 struct Ray {
     origin: vec3f,

@@ -29,7 +29,7 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     let totalVerts = 0;
     
     // Pre-calculate totals
-    let nodes = [sceneRoot];
+    let nodes: Entity[] = [sceneRoot];
     while (nodes.length > 0) {
         let node = nodes.pop()!;
         const mr = node.getComponent(MeshRenderer);

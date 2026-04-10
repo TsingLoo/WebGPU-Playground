@@ -28,8 +28,8 @@
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
+    let render_width  = pt.width;
+    let render_height = pt.height;
     let total_pixels  = render_width * render_height;
     if (gid.x >= total_pixels) { return; }
     let pixel_id = gid.x;
@@ -94,7 +94,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var final_alpha = mat.alpha;
     if (mat.tex_layer >= 0) {
         let tex_col = textureSampleLevel(base_color_tex, tex_sampler, hit_uv, mat.tex_layer, 0.0);
-        albedo *= tex_col.xyz;
+        // Base color textures are sRGB-encoded; decode to linear for PBR math
+        albedo *= srgbToLinear(tex_col.xyz);
         final_alpha *= tex_col.w;
     }
 
@@ -137,6 +138,31 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         let normal_sample = textureSampleLevel(normal_map_tex, tex_sampler, hit_uv, mat.normal_tex_layer, 0.0).rgb;
         let tangent_normal = normal_sample * 2.0 - 1.0;
         N = normalize(tbn * tangent_normal);
+    }
+
+    // =================================================================
+    // USER DEBUG VISUALIZER
+    // Set to 1=Normals, 2=Barycentric, 3=Albedo, 4=Alpha Debug
+    // =================================================================
+    const DEBUG_VIEW_MODE: u32 = 0u; // Change this to debug
+
+    if (DEBUG_VIEW_MODE != 0u && ray.bounce == 0u && ray.ray_active != 2u) {
+        if (DEBUG_VIEW_MODE == 1u) {
+            accum_buffer[pixel_id] = vec4f(abs(N), 1.0);
+        } else if (DEBUG_VIEW_MODE == 2u) {
+            accum_buffer[pixel_id] = vec4f(bw, 1.0);
+        } else if (DEBUG_VIEW_MODE == 3u) {
+            accum_buffer[pixel_id] = vec4f(albedo, 1.0);
+        } else if (DEBUG_VIEW_MODE == 4u) {
+            if (mat.alpha_mode != 0u && final_alpha < mat.alpha_cutoff) {
+                accum_buffer[pixel_id] = vec4f(1.0, 0.0, 0.0, 1.0); // Red = skipped transparency
+            } else {
+                accum_buffer[pixel_id] = vec4f(final_alpha, final_alpha, final_alpha, 1.0); // Grayscale = opaque alpha
+            }
+        }
+        ray.ray_active = 0u;
+        ray_buffer[pixel_id] = ray;
+        return;
     }
 
     var rng = initRNG(pixel_id ^ (ray.bounce * 1009u), pt.frame_index);
@@ -218,23 +244,38 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var is_specular: bool = false;
 
     if (use_specular) {
-        let H      = sampleGGX(N, roughness, &rng);
-        let L      = normalize(reflect(-V, H));
-        let NdotL  = dot(N, L);
-        if (NdotL <= 0.0) {
-            ray.ray_active = 0u;
-            ray_buffer[pixel_id] = ray;
-            return;
+        // Retry GGX sampling a few times to find a valid above-hemisphere direction.
+        // For rough surfaces, a large fraction of GGX samples produce NdotL <= 0.
+        var found_valid = false;
+        var L = vec3f(0.0);
+        var NdotH_s = 0.0;
+        var VdotH_s = 0.0;
+        var NdotL_s = 0.0;
+        for (var attempt = 0u; attempt < 4u; attempt++) {
+            let H      = sampleGGX(N, roughness, &rng);
+            L          = normalize(reflect(-V, H));
+            NdotL_s    = dot(N, L);
+            if (NdotL_s > 0.0) {
+                NdotH_s = max(dot(N, H), 0.0001);
+                VdotH_s = max(dot(V, H), 0.0001);
+                found_valid = true;
+                break;
+            }
         }
-        let NdotH  = max(dot(N, H), 0.0001);
-        let VdotH  = max(dot(V, H), 0.0001);
-        let NdotL_ = max(NdotL, 0.0001);
+        if (!found_valid) {
+            // All GGX attempts failed — fall back to cosine hemisphere
+            L = sampleCosineHemisphere(N, &rng);
+            NdotL_s = max(dot(N, L), 0.0001);
+            let H_fb = normalize(V + L);
+            NdotH_s = max(dot(N, H_fb), 0.0001);
+            VdotH_s = max(dot(V, H_fb), 0.0001);
+        }
 
-        let Fspec  = fresnelSchlickV(VdotH, F0);
+        let Fspec  = fresnelSchlickV(VdotH_s, F0);
         let G      = geometrySchlickGGX_pt(NdotV, roughness)
-                   * geometrySchlickGGX_pt(NdotL_, roughness);
+                   * geometrySchlickGGX_pt(max(NdotL_s, 0.0001), roughness);
 
-        let spec_brdf_weight = Fspec * G * VdotH / max(NdotH * NdotV, 0.0001);
+        let spec_brdf_weight = Fspec * G * VdotH_s / max(NdotH_s * NdotV, 0.0001);
         new_dir       = L;
         new_throughput = ray.throughput * spec_brdf_weight * (rr_weight / spec_prob);
         is_specular   = (roughness < 0.05);
