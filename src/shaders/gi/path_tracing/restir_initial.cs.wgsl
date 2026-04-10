@@ -18,6 +18,8 @@
 @group(0) @binding(9)  var<storage, read>        bvh_normals:        array<vec4f>;
 @group(0) @binding(10) var<storage, read>        bvh_uvs:            array<vec4f>;
 @group(0) @binding(11) var<storage, read_write>  pixel_data_out:     array<vec4f>;
+@group(0) @binding(12) var                       emissive_tex:       texture_2d_array<f32>;
+@group(0) @binding(13) var                       tex_sampler:        sampler;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -130,7 +132,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
             // Emissive radiance from material
             let mat = unpackPTMaterial(&materials, tri_global.w);
-            cand_Le = mat.emissive;
+            var final_emission = mat.emissive;
+            if (mat.emissive_tex_layer >= 0) {
+                let uv0 = bvh_uvs[tri_global.x].xy;
+                let uv1 = bvh_uvs[tri_global.y].xy;
+                let uv2 = bvh_uvs[tri_global.z].xy;
+                let light_uv = bary_light.x * uv0 + bary_light.y * uv1 + bary_light.z * uv2;
+                let em_sample = textureSampleLevel(emissive_tex, tex_sampler, light_uv, mat.emissive_tex_layer, 0.0).rgb;
+                final_emission *= em_sample;
+            }
+            cand_Le = final_emission;
 
             let to_light = cand_pos - hit_pos;
             cand_dist = length(to_light);

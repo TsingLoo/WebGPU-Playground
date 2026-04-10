@@ -19,6 +19,7 @@
 @group(0) @binding(12) var<storage, read>        bvh_uvs:            array<vec4f>;
 @group(0) @binding(13) var<storage, read>        bvh_normals:        array<vec4f>;
 @group(0) @binding(14) var<storage, read>        bvh_tangents:       array<vec4f>;
+@group(0) @binding(15) var                       emissive_tex:       texture_2d_array<f32>;
 
 // NRC Group
 @group(1) @binding(0)  var<uniform>              nrc:                NRCUniforms;
@@ -171,9 +172,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let NdotV = max(dot(N, V), 0.0001);
 
     // Emissive
-    if (any(mat.emissive > vec3f(0.001))) {
+    var final_emission = mat.emissive;
+    if (mat.emissive_tex_layer >= 0) {
+        let em_sample = textureSampleLevel(emissive_tex, tex_sampler, hit_uv, mat.emissive_tex_layer, 0.0).rgb;
+        final_emission *= em_sample;
+    }
+    
+    if (any(final_emission > vec3f(0.001))) {
         let prev = accum_buffer[pixel_id];
-        let em   = clamp(ray.throughput * mat.emissive, vec3f(0.0), vec3f(pt.clamp_radiance));
+        let em   = clamp(ray.throughput * final_emission, vec3f(0.0), vec3f(pt.clamp_radiance));
         accum_buffer[pixel_id] = vec4f(prev.xyz + em, prev.w);
     }
 
