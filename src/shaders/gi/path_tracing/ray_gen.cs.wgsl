@@ -43,9 +43,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     ray.bounce          = 0u;
     ray.ray_active      = 1u;
     ray.specular_bounce = 0u;
-    ray._pad            = vec2u(0u);
-
-    ray_buffer[pixel_id] = ray;
+    ray._pad            = 0u;
 
     // ============================================================
     // Spectral Rendering: sample hero wavelengths
@@ -59,4 +57,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         spectral_pdfs[pixel_id]           = pdfs;
         spectral_throughput_buf[pixel_id] = vec4f(1.0);  // initialize to 1
     }
+
+    ray.rng_state        = rng;
+    ray_buffer[pixel_id] = ray;
 }

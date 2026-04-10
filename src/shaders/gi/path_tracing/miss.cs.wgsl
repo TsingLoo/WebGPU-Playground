@@ -40,7 +40,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         // Spectral mode: convert env color to spectral, multiply by spectral throughput
         let lambdas         = spectral_wavelengths[pixel_id];
         let spec_throughput = spectral_throughput_buf[pixel_id];
-        let spec_env        = rgbToSpectrum(env_color, lambdas);
+        let spec_env        = rgbToIlluminantSpectrum(env_color, lambdas);
         let contribution    = min(spec_throughput * spec_env, vec4f(pt.clamp_radiance));
 
         let prev = spectral_accum_buf[pixel_id];

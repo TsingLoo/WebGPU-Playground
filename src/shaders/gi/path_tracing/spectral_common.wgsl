@@ -126,16 +126,42 @@ fn applyGramInverse(raw: vec3f) -> vec3f {
 }
 
 // ============================================================
-// RGB → Spectral Reflectance
+// RGB → Spectral Reflectance (Bounded)
 // ============================================================
-// Uses sRGB spectral response basis functions:
-//   S(λ) = R * resp_R(λ) + G * resp_G(λ) + B * resp_B(λ)
-//
-// This can produce negative values (metamerism), which is
-// mathematically correct. The Gram matrix correction in
-// spectrumToRGB ensures perfect round-tripping.
+// PBRT explicitly distinguishes between Reflectance and Illuminant spectra.
+// For Reflectances (Albedo, F0), the response MUST be bounded within [0, 1] 
+// to ensure energy conservation. The true Gram/CMF formulation produces 
+// values >1.0 or <0.0 which causes exponential color explosions across bounces.
+// We decompose RGB into an achromatic part (flat spectrum) and a chromatic part.
 
-fn rgbToSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
+fn rgbToReflectanceSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
+    let white = min(rgb.r, min(rgb.g, rgb.b));
+    let color = rgb - vec3f(white);
+    
+    // Achromatic base reflects equally across all wavelengths safely
+    var result = vec4f(white);
+    
+    for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
+        let l = lambdas[i];
+        
+        // Distribute remaining chromatic energy safely via Gaussian curves
+        let r_val = exp(-0.5 * ((l - 610.0) / 40.0) * ((l - 610.0) / 40.0));
+        let g_val = exp(-0.5 * ((l - 540.0) / 40.0) * ((l - 540.0) / 40.0));
+        let b_val = exp(-0.5 * ((l - 450.0) / 40.0) * ((l - 450.0) / 40.0));
+        
+        result[i] += color.r * r_val + color.g * g_val + color.b * b_val;
+    }
+    
+    // Hard physics clamp
+    return clamp(result, vec4f(0.0), vec4f(1.0));
+}
+
+// ============================================================
+// RGB → Spectral Illuminant (Unbounded / Exact Round-Trip)
+// ============================================================
+// Uses sRGB spectral response basis functions for light sources.
+
+fn rgbToIlluminantSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
     var result = vec4f(0.0);
     for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
         let resp = srgbResponse(lambdas[i]);
@@ -143,7 +169,6 @@ fn rgbToSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
     }
     return result;
 }
-
 // ============================================================
 // Spectrum → sRGB (Monte Carlo with Gram correction)
 // ============================================================

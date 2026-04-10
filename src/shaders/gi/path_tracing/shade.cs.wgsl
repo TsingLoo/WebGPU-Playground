@@ -184,7 +184,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         return;
     }
 
-    var rng = initRNG(pixel_id ^ (ray.bounce * 1009u), pt.frame_index);
+    var rng = ray.rng_state;
 
     let V     = -ray.direction;
     let NdotV = max(dot(N, V), 0.0001);
@@ -195,9 +195,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var spec_albedo = vec4f(0.0);
     var spec_F0     = vec4f(0.04);
     if (is_spectral) {
-        spec_albedo = rgbToSpectrum(albedo, lambdas);
+        spec_albedo = rgbToReflectanceSpectrum(albedo, lambdas);
         // F0 for dielectrics in spectral: 0.04 uniform, for metals: spectral albedo
-        let dielectric_F0 = rgbToSpectrum(vec3f(0.04), lambdas);
+        let dielectric_F0 = rgbToReflectanceSpectrum(vec3f(0.04), lambdas);
         let metal_F0      = spec_albedo;
         spec_F0 = mix(dielectric_F0, metal_F0, metallic);
     }
@@ -212,7 +212,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (any(final_emission > vec3f(0.001))) {
         if (is_spectral) {
             // Convert emissive to spectral, multiply by spectral throughput, accumulate
-            let spec_emission = rgbToSpectrum(final_emission, lambdas);
+            let spec_emission = rgbToIlluminantSpectrum(final_emission, lambdas);
             let spec_contrib = spec_throughput * spec_emission;
             let clamped_spec = min(spec_contrib, vec4f(pt.clamp_radiance));
             let prev = spectral_accum_buf[pixel_id];
@@ -270,7 +270,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             }
 
             // Spectral throughput update: albedo tint
-            spec_throughput *= rgbToSpectrum(albedo, lambdas);
+            spec_throughput *= rgbToReflectanceSpectrum(albedo, lambdas);
             spectral_throughput_buf[pixel_id] = spec_throughput;
 
             ray.throughput       = vec3f(1.0); // placeholder, unused in spectral mode
@@ -280,6 +280,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             ray.bounce          += 1u;
             ray.ray_active       = select(0u, 1u, ray.bounce < pt.max_bounces);
             ray.specular_bounce  = 1u;
+            ray.rng_state        = rng;
             ray_buffer[pixel_id] = ray;
             return;
         } else {
@@ -312,6 +313,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             ray.bounce          += 1u;
             ray.ray_active       = select(0u, 1u, ray.bounce < pt.max_bounces);
             ray.specular_bounce  = 1u;
+            ray.rng_state        = rng;
             ray_buffer[pixel_id] = ray;
             return;
         }
@@ -456,7 +458,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                 // separately accumulate spectral NEE contribution.
                 // We convert the sun radiance to spectral, evaluate spectral BRDF,
                 // and store the spectral contribution directly.
-                let spec_sun_rad = rgbToSpectrum(sun_rad, lambdas);
+                let spec_sun_rad = rgbToIlluminantSpectrum(sun_rad, lambdas);
                 let F_s_spec     = fresnelSchlickSpectral(VdotH_s, spec_F0);
                 let spec_s_val   = F_s_spec * D_s * G_s / max(4.0 * NdotV * NdotL_s, 0.0001);
                 let diff_s_spec  = (vec4f(1.0) - F_s_spec) * (1.0 - metallic) * spec_albedo / PI;
@@ -612,5 +614,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         // Terminate naturally
     }
 
+    ray.rng_state = rng;
     ray_buffer[pixel_id] = ray;
 }

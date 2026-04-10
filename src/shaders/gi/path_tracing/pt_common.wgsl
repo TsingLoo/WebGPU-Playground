@@ -25,7 +25,8 @@ struct PTRay {
     bounce:          u32,     //  4  current bounce depth
     ray_active:      u32,     //  4  0=inactive, 1=active  (named ray_active to avoid WGSL reserved 'active')
     specular_bounce: u32,     //  4  1 = last event was purely specular
-    _pad:            vec2u,   //  8
+    rng_state:       u32,     //  4  current pcg state
+    _pad:            u32,     //  4
 }; // 64 bytes
 
 // 48 bytes — compact hit; shade reconstructs pos/normal/tangent/uv from BVH
