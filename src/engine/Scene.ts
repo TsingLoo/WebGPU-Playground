@@ -20,6 +20,8 @@ export class Scene {
     public normalMapTexArrayView!: GPUTextureView;
     public mrTexArray!: GPUTexture;
     public mrTexArrayView!: GPUTextureView;
+    public emissiveTexArray!: GPUTexture;
+    public emissiveTexArrayView!: GPUTextureView;
 
     // CPU Data required for appending
     public materialDataArray: Float32Array = new Float32Array(0);
@@ -126,9 +128,10 @@ export class Scene {
         newBaseColorImages: GPUTexture[],
         newNormalMapImages: GPUTexture[],
         newMRImages: GPUTexture[],
+        newEmissiveImages: GPUTexture[],
         newLayerCount: number
     ) {
-        const FLOATS_PER_MAT = 16;
+        const FLOATS_PER_MAT = 20;
         // --- Merge Global Material Buffer ---
         const combinedMaterials = new Float32Array(this.materialCount * FLOATS_PER_MAT + newCount * FLOATS_PER_MAT);
         
@@ -196,6 +199,10 @@ export class Scene {
         // --- Merge MR Texture Array (linear) ---
         this.mrTexArray = mergeTexArray("MR Array", this.mrTexArray, this.layerCount, newMRImages);
         this.mrTexArrayView = this.mrTexArray.createView({ dimension: '2d-array' });
+
+        // --- Merge Emissive Texture Array (sRGB usually, but we use linear like everything else) ---
+        this.emissiveTexArray = mergeTexArray("Emissive Array", this.emissiveTexArray, this.layerCount, newEmissiveImages);
+        this.emissiveTexArrayView = this.emissiveTexArray.createView({ dimension: '2d-array' });
 
         this.layerCount = totalLayers;
     }

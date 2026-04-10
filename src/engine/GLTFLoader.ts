@@ -385,6 +385,16 @@ export class GLTFLoaderParams {
     public voxelBoundsMax = [15, 15, 10];
 }
 
+export interface GLTFResult {
+    rootEntity: Entity;
+    materialDataArray: Float32Array;
+    materialCount: number;
+    baseColorImages: GPUTexture[];
+    normalMapImages: GPUTexture[];
+    mrImages: GPUTexture[];
+    emissiveImages: GPUTexture[];
+}
+
 export class GLTFResult {
     public rootEntity: Entity;
     public materialDataArray: Float32Array;
@@ -392,14 +402,16 @@ export class GLTFResult {
     public baseColorImages: GPUTexture[];
     public normalMapImages: GPUTexture[];
     public mrImages: GPUTexture[];
+    public emissiveImages: GPUTexture[];
     
-    constructor(root: Entity, materialData: Float32Array, materialCount: number, baseColorImages: GPUTexture[], normalMapImages: GPUTexture[], mrImages: GPUTexture[]) {
+    constructor(root: Entity, materialData: Float32Array, materialCount: number, baseColorImages: GPUTexture[], normalMapImages: GPUTexture[], mrImages: GPUTexture[], emissiveImages: GPUTexture[]) {
         this.rootEntity = root;
         this.materialDataArray = materialData;
         this.materialCount = materialCount;
         this.baseColorImages = baseColorImages;
         this.normalMapImages = normalMapImages;
         this.mrImages = mrImages;
+        this.emissiveImages = emissiveImages;
     }
 }
 
@@ -542,6 +554,24 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
             }
         }
 
+        // Build emissive image array
+        let emissiveImages: GPUTexture[] = [];
+        if (gltfWithBuffers.images) {
+            for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
+                const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
+                const resized = await createImageBitmap(srcBitmap, {
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
+                });
+                const tempTex = device.createTexture({
+                    size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                device.queue.copyExternalImageToTexture({ source: resized }, { texture: tempTex }, { width: TEX_ARRAY_SIZE, height: TEX_ARRAY_SIZE });
+                emissiveImages.push(tempTex);
+                resized.close();
+            }
+        }
+
         // Build material → texture layer mapping
         const numImages = baseColorImages.length;
         function getImageLayer(gltfMat: any, texAccessor: (m: any) => any): number {
@@ -560,20 +590,26 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         function getMRImageLayer(gltfMat: any): number {
             return getImageLayer(gltfMat, m => m.pbrMetallicRoughness?.metallicRoughnessTexture?.index);
         }
+        function getEmissiveImageLayer(gltfMat: any): number {
+            return getImageLayer(gltfMat, m => (m as any).emissiveTexture?.index);
+        }
 
         let sceneMaterials: Material[] = [];
         const materialCount = Math.max(1, gltf.materials?.length ?? 0);
-        // 16 floats per material (64 bytes):
+        // 20 floats per material (80 bytes):
         // [0-3]: baseColorFactor (rgba)
         // [4]:   roughness
         // [5]:   metallic
-        // [6]:   texLayer (i32 bitcast)
+        // [6]:   texLayer (f32)
         // [7]:   transmission
         // [8]:   ior
-        // [9-11]: emissiveFactor (rgb)
-        // [12]:  normal_tex_layer (i32 bitcast)
-        // [13]:  mr_tex_layer (i32 bitcast)
-        let materialDataArray: Float32Array = new Float32Array(materialCount * 16);
+        // [9-11]: emissiveFactor (rgb) // actually 12 is free? Wait, 12 is normal_tex_layer. emissive is only 3 floats, so 11 is z.
+        // [12]:  normal_tex_layer (f32)
+        // [13]:  mr_tex_layer (f32)
+        // [14]:  alpha_cutoff
+        // [15]:  alpha_mode
+        // [16]:  emissive_tex_layer (f32)
+        let materialDataArray: Float32Array = new Float32Array(materialCount * 20);
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
         let defaultMetallic = 1.0;  // glTF 2.0 spec default
@@ -599,6 +635,9 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 let mrTexLayer = getMRImageLayer(gltfMaterial);
                 if (mrTexLayer >= 0) mrTexLayer += layerOffset;
 
+                let emissiveTexLayer = getEmissiveImageLayer(gltfMaterial);
+                if (emissiveTexLayer >= 0) emissiveTexLayer += layerOffset;
+
                 // KHR_materials_transmission: transmissionFactor (0-1)
                 const transmissionExt = (gltfMaterial as any).extensions?.KHR_materials_transmission;
                 const transmission: number = transmissionExt?.transmissionFactor ?? 0.0;
@@ -612,7 +651,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 const emissiveStrengthExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
                 const emissiveStrength: number = emissiveStrengthExt?.emissiveStrength ?? 1.0;
 
-                const base = i * 16;
+                const base = i * 20;
                 materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
                 materialDataArray[base + 1] = baseColorFactor[1] ?? 1.0;
                 materialDataArray[base + 2] = baseColorFactor[2] ?? 1.0;
@@ -634,6 +673,10 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 materialDataArray[base + 13] = mrTexLayer;
                 materialDataArray[base + 14] = gltfMaterial.alphaCutoff ?? 0.5;
                 materialDataArray[base + 15] = alphaModeEnum;
+                materialDataArray[base + 16] = emissiveTexLayer;
+                materialDataArray[base + 17] = 0.0;
+                materialDataArray[base + 18] = 0.0;
+                materialDataArray[base + 19] = 0.0;
             }
         }
 
@@ -693,7 +736,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
 
         sceneRoot.updateWorldTransform();
         
-        return new GLTFResult(sceneRoot, materialDataArray, materialCount, baseColorImages, normalMapImages, mrImages);
+        return new GLTFResult(sceneRoot, materialDataArray, materialCount, baseColorImages, normalMapImages, mrImages, emissiveImages);
 }
 
 export function buildVoxelGrid(rootEntity: Entity, params: GLTFLoaderParams = new GLTFLoaderParams()): {voxelGrid: GPUTexture, voxelGridView: GPUTextureView} {

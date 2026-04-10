@@ -67,6 +67,7 @@ struct PTMaterial {
     mr_tex_layer:     i32,     // index into metallic-roughness texture array (-1 = none)
     alpha_cutoff:     f32,     // alpha test threshold
     alpha_mode:       u32,     // 0=OPAQUE, 1=MASK, 2=BLEND
+    emissive_tex_layer: i32,
 };
 
 // ============================================================
@@ -157,16 +158,18 @@ fn sampleGGX(n: vec3f, roughness: f32, rng: ptr<function, u32>) -> vec3f {
 }
 
 // ============================================================
-// Material unpack (4 × vec4f = 16 floats per material entry)
+// ============================================================
+// Material unpack (5 × vec4f = 20 floats per material entry)
 fn unpackPTMaterial(
     mats: ptr<storage, array<vec4f>, read>,
     mat_id: u32
 ) -> PTMaterial {
-    let base = mat_id * 4u;
+    let base = mat_id * 5u;
     let r0 = (*mats)[base + 0u];
     let r1 = (*mats)[base + 1u];
     let r2 = (*mats)[base + 2u];
     let r3 = (*mats)[base + 3u];
+    let r4 = (*mats)[base + 4u];
     var m: PTMaterial;
     m.albedo           = r0.xyz;
     m.alpha            = r0.w;
@@ -180,6 +183,7 @@ fn unpackPTMaterial(
     m.mr_tex_layer     = i32(r3.y);
     m.alpha_cutoff     = r3.z;
     m.alpha_mode       = u32(r3.w);
+    m.emissive_tex_layer = i32(r4.x);
     return m;
 }
 

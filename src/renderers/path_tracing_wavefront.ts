@@ -248,6 +248,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
                 { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_normals
                 { binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_tangents
+                { binding: 15, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // emissive_tex
             ]
         });
 
@@ -337,6 +338,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // bvh_normals
                 { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_uvs
                 { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pixel_data_out
+                { binding: 12, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // emissive_tex
+                { binding: 13, visibility: GPUShaderStage.COMPUTE, sampler: {} },                            // tex_sampler
             ]
         });
         console.log('[ReSTIR] Initial layout created');
@@ -393,6 +396,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // bvh_tangents
                 { binding: 15, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // normal_map_tex
                 { binding: 16, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pixel_data_out
+                { binding: 17, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } }, // emissive_tex
             ]
         });
         console.log('[ReSTIR] Shade layout created');
@@ -666,6 +670,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 12, resource: { buffer: bvhData.uvBuffer } },
                             { binding: 13, resource: { buffer: bvhData.normalBuffer } },
                             { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
+                            { binding: 15, resource: scene.emissiveTexArrayView },
                         ]
                     });
                     
@@ -714,6 +719,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
                                 { binding: 9, resource: { buffer: bvhData.normalBuffer } },
                                 { binding: 10, resource: { buffer: bvhData.uvBuffer } },
                                 { binding: 11, resource: { buffer: pass.getBuffer(pixelDataHandle) } },
+                                { binding: 12, resource: scene.emissiveTexArrayView },
+                                { binding: 13, resource: baseColorSampler },
                             ]
                         });
                         computePass.setPipeline(this.restirInitialPipeline);
@@ -810,6 +817,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                                 { binding: 14, resource: { buffer: bvhData.tangentBuffer } },
                                 { binding: 15, resource: scene.normalMapTexArrayView },
                                 { binding: 16, resource: { buffer: pass.getBuffer(pixelDataHandle) } },
+                                { binding: 17, resource: scene.emissiveTexArrayView },
                             ]
                         });
                         computePass.setPipeline(this.restirShadePipeline);

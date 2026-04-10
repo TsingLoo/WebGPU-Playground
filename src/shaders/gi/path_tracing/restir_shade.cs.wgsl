@@ -25,6 +25,7 @@
 @group(0) @binding(15) var                        normal_map_tex:     texture_2d_array<f32>;
 // Pixel data output — for temporal resampling next frame
 @group(0) @binding(16) var<storage, read_write>   pixel_data_out:     array<vec4f>;
+@group(0) @binding(17) var                        emissive_tex:       texture_2d_array<f32>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {

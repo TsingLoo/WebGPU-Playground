@@ -30,6 +30,7 @@ Manages rendering entities and data independently of the rendering pipelines the
 - `Radiance Cascades`: Uses cascaded voxel grids for fast ambient light evaluation.
 - `VSM` (Virtual Shadow Maps): Implements a clipmap-based virtual shadow mapping system for the directional sun light. Instead of rendering a massive single shadow map, it uses GPU-driven page allocation. A compute pass marks which virtual pages are visible based on the depth buffer, and the system dynamically assigns physical atlas pages to fulfill these requests, supporting incredibly high-resolution shadows over large distances.
 - `BVH Builder` rapidly constructs acceleration structures from the GLTF scenes allowing compute shaders to perform fast ray intersections.
+  - **Optimization Features**: The BVH pipeline forces a strict `maxLeafSize` of 4 during CPU construction to enable static branchless unrolling of triangle intersection loops in WGSL. Traversal operates on a highly constrained depth-24 short stack mapped explicitly to private thread scopes to avoid register thrashing. Intersection paths share an expanded `Ray` data structure that caches IEEE 754-safe inverse direction checks alongside FMA-fused (Fused Multiply-Add) AABB bounds testing to slash shader MS-per-frame execution time.
 
 ### 4. Scene Management (`src/engine/Scene.ts`, `Entity.ts`)
 Standard Entity-Component hierarchy loading from `GLTF` formats in `main.ts`. Transforms are synced and flattened to a global material/mesh buffer consumed by either WebGPU raster pipelines or BVH compute traces.
