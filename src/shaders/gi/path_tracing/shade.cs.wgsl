@@ -330,7 +330,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // termination if we want to ensure N=5. Let's just disable RR for training paths (ray_active == 2) for better variance.
     var rr_max: f32;
     if (is_spectral) {
-        rr_max = max(spec_throughput[0], max(spec_throughput[1], max(spec_throughput[2], spec_throughput[3])));
+        // sRGB response basis can produce negative spectral values; use abs for RR
+        rr_max = max(abs(spec_throughput[0]), max(abs(spec_throughput[1]), max(abs(spec_throughput[2]), abs(spec_throughput[3]))));
     } else {
         rr_max = max(ray.throughput.x, max(ray.throughput.y, ray.throughput.z));
     }
@@ -412,7 +413,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Clamp throughput to prevent fireflies
     if (is_spectral) {
-        let tp_max = max(new_spec_throughput[0], max(new_spec_throughput[1], max(new_spec_throughput[2], new_spec_throughput[3])));
+        let tp_max = max(abs(new_spec_throughput[0]), max(abs(new_spec_throughput[1]), max(abs(new_spec_throughput[2]), abs(new_spec_throughput[3]))));
         if (tp_max > 20.0) {
             new_spec_throughput *= 20.0 / tp_max;
         }
@@ -523,7 +524,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     ray.specular_bounce = select(0u, 1u, is_specular);
 
     if (is_spectral) {
-        if (max(new_spec_throughput[0], max(new_spec_throughput[1], max(new_spec_throughput[2], new_spec_throughput[3]))) < 0.001) {
+        if (max(abs(new_spec_throughput[0]), max(abs(new_spec_throughput[1]), max(abs(new_spec_throughput[2]), abs(new_spec_throughput[3])))) < 0.001) {
             ray.ray_active = 0u;
         }
     } else {

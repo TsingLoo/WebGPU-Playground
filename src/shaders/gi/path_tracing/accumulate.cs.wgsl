@@ -7,8 +7,9 @@
 // accum_buffer: temporary scratch for the current frame's radiance (set by shade/shadow)
 // sample_sum_buf: PERSISTENT sum across all samples (read-write)
 //
-// In spectral mode, reads from spectral_accum_buf, converts to XYZ then linear sRGB,
-// and adds to sample_sum_buf as RGB. This way tonemap is unchanged.
+// In spectral mode, reads from spectral_accum_buf, converts to linear sRGB
+// via spectrumToRGB (Gram-corrected MC estimator), and adds to sample_sum_buf.
+// This way tonemap is unchanged.
 //
 // IMPORTANT: sample_sum_buf is CLEARED by resetAccumulation() which zeros the buffer,
 // and sample_count is reset to 0.
@@ -31,18 +32,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (pt.spectral_enabled == 1u) {
         // ============================================================
         // Spectral mode: spectral_accum_buf has 4 spectral samples.
-        // Convert to XYZ, then sRGB, add to persistent sum.
+        // Convert directly to sRGB using Gram-corrected MC estimator.
         // Also add any RGB contributions from shadow_test (NEE Li).
         // ============================================================
         let spectral_sample = spectral_accum_buf[pixel_id];
         let lambdas         = spectral_wavelengths[pixel_id];
-        let pdfs            = spectral_pdfs[pixel_id];
 
-        // Convert spectral radiance to XYZ
-        let xyz = spectrumToXYZ(spectral_sample, lambdas, pdfs);
-
-        // XYZ to linear sRGB
-        var rgb = xyzToLinearSRGB(xyz);
+        // Direct spectral→RGB with Gram matrix correction (guaranteed round-trip)
+        var rgb = spectrumToRGB(spectral_sample, lambdas);
 
         // Clamp negative values (can happen from out-of-gamut spectral conversions)
         rgb = max(rgb, vec3f(0.0));

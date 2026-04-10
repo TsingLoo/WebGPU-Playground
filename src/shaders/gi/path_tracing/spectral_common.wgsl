@@ -5,6 +5,13 @@
 // Reference: Physically Based Rendering v4 (Pharr, Jakob, Humphreys)
 //   - Chapter 4: Radiometry, Spectra, and Color
 //   - Hero wavelength sampling: Wilkie et al. 2014
+//
+// COLOR PIPELINE:
+//   rgbToSpectrum()  — sRGB spectral response basis (guaranteed round-trip)
+//   spectrumToRGB()  — direct spectral→sRGB with Gram matrix correction
+//   Both use sRGB response functions = rows of XYZ→sRGB matrix × CIE CMFs.
+//   The precomputed Gram matrix G' and its inverse G'^(-1) ensure that
+//   E[ spectrumToRGB( rgbToSpectrum(c) ) ] = c  exactly.
 
 // ============================================================
 // Constants
@@ -14,7 +21,7 @@ const LAMBDA_MAX: f32 = 830.0;  // nm
 const LAMBDA_RANGE: f32 = 470.0; // LAMBDA_MAX - LAMBDA_MIN
 const N_SPECTRAL_SAMPLES: u32 = 4u;
 
-// Normalization constant for CIE Y integral (≈106.857)
+// CIE Y integral ∫ȳ(λ)dλ over [360,830] — used for physical XYZ normalization
 const CIE_Y_INTEGRAL: f32 = 106.857;
 
 // ============================================================
@@ -70,14 +77,104 @@ fn cie_z(lambda: f32) -> f32 {
 }
 
 // ============================================================
-// Spectrum → XYZ → sRGB
+// sRGB Spectral Response Functions
 // ============================================================
+// resp_k(λ) = M_xyz2rgb[k,:] · [x̄(λ), ȳ(λ), z̄(λ)]
+// These define the spectral sensitivity of each sRGB channel.
 
-// Convert 4 spectral samples to CIE XYZ tristimulus values.
-// Uses Monte Carlo integration: XYZ = (1/N) * Σ S(λ) * [x̄/ȳ/z̄](λ) / pdf(λ)
+fn srgbResponse(lambda: f32) -> vec3f {
+    let x = cie_x(lambda);
+    let y = cie_y(lambda);
+    let z = cie_z(lambda);
+    return vec3f(
+         3.2404542 * x - 1.5371385 * y - 0.4985314 * z,  // R
+        -0.9692660 * x + 1.8760108 * y + 0.0415560 * z,  // G
+         0.0556434 * x - 0.2040259 * y + 1.0572252 * z   // B
+    );
+}
+
+// ============================================================
+// Gram Matrix Inverse for sRGB Spectral Round-Trip
+// ============================================================
+// G'[j][k] = ∫ resp_j(λ) * resp_k(λ) dλ  over [360, 830]
+//
+// Precomputed numerically using Wyman Gaussian CMFs:
+// G' = [ 339.9437, -15.1686,  -4.8310 ]
+//      [ -15.1686, 132.7275, -19.9267 ]
+//      [  -4.8310, -19.9267, 158.5486 ]
+//
+// The inverse G'^(-1) corrects the MC estimator so that
+// E[spectrumToRGB(rgbToSpectrum(c, λ), λ)] = c  exactly.
+//
+// Stored as column-major mat3x3f:
+const GRAM_INV_00: f32 = 0.002960;
+const GRAM_INV_01: f32 = 0.000359;
+const GRAM_INV_02: f32 = 0.000135;
+const GRAM_INV_10: f32 = 0.000359;
+const GRAM_INV_11: f32 = 0.007723;
+const GRAM_INV_12: f32 = 0.000982;
+const GRAM_INV_20: f32 = 0.000135;
+const GRAM_INV_21: f32 = 0.000982;
+const GRAM_INV_22: f32 = 0.006435;
+
+fn applyGramInverse(raw: vec3f) -> vec3f {
+    return vec3f(
+        GRAM_INV_00 * raw.x + GRAM_INV_01 * raw.y + GRAM_INV_02 * raw.z,
+        GRAM_INV_10 * raw.x + GRAM_INV_11 * raw.y + GRAM_INV_12 * raw.z,
+        GRAM_INV_20 * raw.x + GRAM_INV_21 * raw.y + GRAM_INV_22 * raw.z
+    );
+}
+
+// ============================================================
+// RGB → Spectral Reflectance
+// ============================================================
+// Uses sRGB spectral response basis functions:
+//   S(λ) = R * resp_R(λ) + G * resp_G(λ) + B * resp_B(λ)
+//
+// This can produce negative values (metamerism), which is
+// mathematically correct. The Gram matrix correction in
+// spectrumToRGB ensures perfect round-tripping.
+
+fn rgbToSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
+    var result = vec4f(0.0);
+    for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
+        let resp = srgbResponse(lambdas[i]);
+        result[i] = rgb.r * resp.x + rgb.g * resp.y + rgb.b * resp.z;
+    }
+    return result;
+}
+
+// ============================================================
+// Spectrum → sRGB (Monte Carlo with Gram correction)
+// ============================================================
+// Direct spectral→RGB conversion, bypassing XYZ.
+//
+// MC estimator: raw[k] = (LAMBDA_RANGE/N) * Σ S(λi) * resp_k(λi)
+// Then:         rgb = G'^(-1) * raw
+//
+// This guarantees E[spectrumToRGB(rgbToSpectrum(c))] = c exactly.
+
+fn spectrumToRGB(spectrum: vec4f, lambdas: vec4f) -> vec3f {
+    var raw = vec3f(0.0);
+    for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
+        let resp = srgbResponse(lambdas[i]);
+        raw += spectrum[i] * resp;
+    }
+    // MC integration: multiply by LAMBDA_RANGE / N
+    raw *= LAMBDA_RANGE / f32(N_SPECTRAL_SAMPLES);
+
+    // Apply Gram matrix inverse for exact round-tripping
+    return applyGramInverse(raw);
+}
+
+// ============================================================
+// Spectrum → CIE XYZ (for physical quantities / emission)
+// ============================================================
+// Standard MC estimator with proper CIE normalization:
+//   XYZ[j] = (1/(N*CIE_Y_INTEGRAL)) * Σ S(λi) * CMF_j(λi) / pdf(λi)
+
 fn spectrumToXYZ(spectrum: vec4f, lambdas: vec4f, pdfs: vec4f) -> vec3f {
     var xyz = vec3f(0.0);
-
     for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
         let lambda = lambdas[i];
         let s = spectrum[i];
@@ -90,14 +187,7 @@ fn spectrumToXYZ(spectrum: vec4f, lambdas: vec4f, pdfs: vec4f) -> vec3f {
             xyz.z += weight * cie_z(lambda);
         }
     }
-
-    // Average over N samples, normalize by CIE Y integral
-    xyz /= f32(N_SPECTRAL_SAMPLES);
-    // The CIE functions are defined such that ∫ȳ(λ)dλ = CIE_Y_INTEGRAL
-    // For a uniform wavelength distribution over [360, 830], the MC estimator gives:
-    // X = LAMBDA_RANGE * (1/N) * Σ S(λi) * x̄(λi)
-    // We want physical units, but for rendering we just need relative scaling.
-    // With pdf = 1/LAMBDA_RANGE, the 1/pdf cancels with the normalization.
+    xyz /= f32(N_SPECTRAL_SAMPLES) * CIE_Y_INTEGRAL;
     return xyz;
 }
 
@@ -108,104 +198,6 @@ fn xyzToLinearSRGB(xyz: vec3f) -> vec3f {
         -0.9692660 * xyz.x + 1.8760108 * xyz.y + 0.0415560 * xyz.z,
          0.0556434 * xyz.x - 0.2040259 * xyz.y + 1.0572252 * xyz.z
     );
-}
-
-// ============================================================
-// RGB → Spectral Reflectance (Smits 1999, simplified)
-// Converts an sRGB triplet to a smooth spectral reflectance
-// evaluated at the given wavelengths.
-// ============================================================
-
-// Basis spectral functions: white, cyan, magenta, yellow, red, green, blue
-// Smits uses piecewise-linear SPDs; we approximate with smooth Gaussian shapes.
-
-fn smitsWhite(lambda: f32) -> f32 {
-    // Approximately flat across the visible spectrum
-    return 1.0;
-}
-
-fn smitsRed(lambda: f32) -> f32 {
-    // Red component: peaks around 620nm, zero below ~580nm
-    return smoothstep(580.0, 620.0, lambda);
-}
-
-fn smitsGreen(lambda: f32) -> f32 {
-    // Green component: peaks around 540nm, Gaussian-like
-    let t = (lambda - 540.0) / 60.0;
-    return exp(-0.5 * t * t);
-}
-
-fn smitsBlue(lambda: f32) -> f32 {
-    // Blue component: peaks around 460nm, fades above 490nm
-    return 1.0 - smoothstep(460.0, 530.0, lambda);
-}
-
-fn smitsCyan(lambda: f32) -> f32 {
-    // Cyan = green + blue region
-    return select(1.0, smoothstep(420.0, 480.0, lambda), lambda < 480.0)
-         * select(1.0, 1.0 - smoothstep(590.0, 660.0, lambda), lambda > 590.0);
-}
-
-fn smitsMagenta(lambda: f32) -> f32 {
-    // Magenta = red + blue (dip in green)
-    return max(smitsRed(lambda), smitsBlue(lambda))
-         * (1.0 - 0.7 * smitsGreen(lambda));
-}
-
-fn smitsYellow(lambda: f32) -> f32 {
-    // Yellow = red + green (no blue)
-    return 1.0 - smitsBlue(lambda);
-}
-
-// Main RGB-to-Spectrum uplifting function.
-// Uses Smits-style decomposition: RGB → white + primary + secondary
-fn rgbToSpectrum(rgb: vec3f, lambdas: vec4f) -> vec4f {
-    var result = vec4f(0.0);
-
-    for (var i = 0u; i < N_SPECTRAL_SAMPLES; i++) {
-        let lambda = lambdas[i];
-        var r = rgb.r;
-        var g = rgb.g;
-        var b = rgb.b;
-
-        var spd = 0.0;
-
-        // Decompose: extract white component first (minimum of R,G,B)
-        let white = min(r, min(g, b));
-        r -= white;
-        g -= white;
-        b -= white;
-        spd += white * smitsWhite(lambda);
-
-        if (r > 0.0 && g > 0.0) {
-            // Yellow region
-            let yellow = min(r, g);
-            r -= yellow;
-            g -= yellow;
-            spd += yellow * smitsYellow(lambda);
-        } else if (r > 0.0 && b > 0.0) {
-            // Magenta region
-            let magenta = min(r, b);
-            r -= magenta;
-            b -= magenta;
-            spd += magenta * smitsMagenta(lambda);
-        } else if (g > 0.0 && b > 0.0) {
-            // Cyan region
-            let cyan = min(g, b);
-            g -= cyan;
-            b -= cyan;
-            spd += cyan * smitsCyan(lambda);
-        }
-
-        // Remaining primaries
-        spd += r * smitsRed(lambda);
-        spd += g * smitsGreen(lambda);
-        spd += b * smitsBlue(lambda);
-
-        result[i] = max(spd, 0.0);
-    }
-
-    return result;
 }
 
 // ============================================================
