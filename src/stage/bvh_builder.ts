@@ -165,7 +165,7 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     geometry.setAttribute('position', new BufferAttribute(positions, 3));
     geometry.setIndex(new BufferAttribute(indices, 1));
     
-    const bvhOptions: MeshBVHOptions = { verbose: false, maxLeafSize: 10 };
+    const bvhOptions: MeshBVHOptions = { verbose: false, maxLeafSize: 4 };
     const bvh = new MeshBVH(geometry, bvhOptions);
     const bvhRoots = (bvh as any)._roots; 
     const bvhNodeBufferArray: ArrayBuffer = bvhRoots[0]; // the 32-byte structs array
