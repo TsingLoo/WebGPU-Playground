@@ -1,9 +1,13 @@
 // ray_gen.cs.wgsl
 // Wavefront Path Tracing — Pass 1: Primary Ray Generation
+// Supports spectral rendering: samples hero wavelengths and initializes spectral buffers.
 
-@group(0) @binding(0) var<uniform>            camera:     CameraUniforms;
-@group(0) @binding(1) var<uniform>            pt:         PTUniforms;
-@group(0) @binding(2) var<storage, read_write> ray_buffer: array<PTRay>;
+@group(0) @binding(0) var<uniform>            camera:                  CameraUniforms;
+@group(0) @binding(1) var<uniform>            pt:                      PTUniforms;
+@group(0) @binding(2) var<storage, read_write> ray_buffer:              array<PTRay>;
+@group(0) @binding(3) var<storage, read_write> spectral_wavelengths:    array<vec4f>;  // per-pixel wavelengths (nm)
+@group(0) @binding(4) var<storage, read_write> spectral_pdfs:           array<vec4f>;  // per-pixel wavelength PDFs
+@group(0) @binding(5) var<storage, read_write> spectral_throughput_buf: array<vec4f>;  // per-pixel spectral throughput
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -42,4 +46,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     ray._pad            = vec2u(0u);
 
     ray_buffer[pixel_id] = ray;
+
+    // ============================================================
+    // Spectral Rendering: sample hero wavelengths
+    // ============================================================
+    if (pt.spectral_enabled == 1u) {
+        let u_wavelength = rand(&rng);
+        let lambdas = sampleHeroWavelengths(u_wavelength);
+        let pdfs = wavelengthPDF();
+
+        spectral_wavelengths[pixel_id]    = lambdas;
+        spectral_pdfs[pixel_id]           = pdfs;
+        spectral_throughput_buf[pixel_id] = vec4f(1.0);  // initialize to 1
+    }
 }

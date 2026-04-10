@@ -85,17 +85,21 @@ struct NRCWavefrontTrainData {
 };
 
 // ============================================================
-// PT Uniforms (per-frame constants)
+// PT Uniforms (per-frame constants) — 48 bytes (12 × u32/f32)
 // ============================================================
 struct PTUniforms {
-    width:          u32,
-    height:         u32,
-    frame_index:    u32,
-    sample_count:   u32,
-    max_bounces:    u32,
-    clamp_radiance: f32,
-    pixel_scale:    f32,
-    restir_enabled: u32,  // 1 = ReSTIR active (shade skips NEE for bounce 0)
+    width:            u32,
+    height:           u32,
+    frame_index:      u32,
+    sample_count:     u32,
+    max_bounces:      u32,
+    clamp_radiance:   f32,
+    pixel_scale:      f32,
+    restir_enabled:   u32,  // 1 = ReSTIR active (shade skips NEE for bounce 0)
+    spectral_enabled: u32,  // 1 = spectral rendering active (hero wavelength)
+    _pad0:            u32,
+    _pad1:            u32,
+    _pad2:            u32,
 };
 
 // ============================================================

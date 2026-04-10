@@ -68,6 +68,7 @@ import ptShadowTestRaw from './gi/path_tracing/shadow_test.cs.wgsl?raw';
 import ptMissRaw from './gi/path_tracing/miss.cs.wgsl?raw';
 import ptAccumulateRaw from './gi/path_tracing/accumulate.cs.wgsl?raw';
 import ptTonemapRaw from './gi/path_tracing/pt_tonemap.wgsl?raw';
+import spectralCommonRaw from './gi/path_tracing/spectral_common.wgsl?raw';
 
 // ReSTIR DI shaders
 import restirCommonRaw from './gi/path_tracing/restir_common.wgsl?raw';
@@ -329,14 +330,15 @@ export const surfelResolveSrc: string = processSurfelShaderRaw(surfelResolveRaw)
 // Path Tracing (Wavefront) shaders
 // ===========================================================================
 const ptCommonSrc: string = evalShaderRaw(ptCommonRaw);
+const spectralCommonSrc: string = evalShaderRaw(spectralCommonRaw);
 
-// Builds a complete PT compute shader: common + nrc_common + bvh + pt_common + shader_body
+// Builds a complete PT compute shader: common + nrc_common + bvh + pt_common + spectral_common + shader_body
 function processPTShaderRaw(raw: string): string {
-    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + evalShaderRaw(raw);
+    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(raw);
 }
 
-// RayGen only needs camera + pt_common (no BVH)
-export const ptRayGenSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptRayGenRaw);
+// RayGen needs camera + pt_common + spectral_common (no BVH)
+export const ptRayGenSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptRayGenRaw);
 
 // Intersection needs BVH
 export const ptIntersectSrc: string = processPTShaderRaw(ptIntersectRaw);
@@ -347,11 +349,11 @@ export const ptShadeSrc: string = processPTShaderRaw(ptShadeRaw);
 // Shadow test needs BVH
 export const ptShadowTestSrc: string = processPTShaderRaw(ptShadowTestRaw);
 
-// Miss only needs pt_common (no BVH)
-export const ptMissSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptMissRaw);
+// Miss needs pt_common + spectral_common (no BVH)
+export const ptMissSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptMissRaw);
 
-// Accumulate: no BVH, no RNG
-export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptAccumulateRaw);
+// Accumulate: no BVH, no RNG, needs spectral_common for conversion
+export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptAccumulateRaw);
 
 // Tonemap: standalone (vertex + fragment in one file, split by entry points)
 export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTonemapRaw);

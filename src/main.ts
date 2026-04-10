@@ -343,6 +343,19 @@ ptFolder.add({ reset: () => {
     }
 }}, 'reset').name('Reset Accumulation');
 
+// Spectral Rendering toggle (pbrt v4 style hero wavelength)
+ptFolder.add({ spectralEnabled: false }, 'spectralEnabled').name('Spectral Rendering').onChange((v: boolean) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) {
+        r.config.spectralEnabled = v;
+        if ('resetAccumulation' in r) {
+            r.resetAccumulation();
+            ptConfig.sampleCount = 0;
+        }
+        console.log(`[WPT] Spectral rendering ${v ? 'ENABLED' : 'DISABLED'}`);
+    }
+});
+
 // Sync sampleCount display each animation frame
 function syncPTStats() {
     const r = renderer as unknown as WavefrontPathTracingRenderer;

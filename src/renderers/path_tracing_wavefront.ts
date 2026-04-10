@@ -32,7 +32,7 @@ import { RenderGraph, ResourceHandle } from '../engine/RenderGraph';
 
 // ============================================================
 // PTUniforms layout (matches pt_common.wgsl PTUniforms struct)
-// 8 × 4 = 32 bytes
+// 12 × 4 = 48 bytes
 // ============================================================
 interface PTConfig {
     maxBounces: number;
@@ -44,6 +44,8 @@ interface PTConfig {
     restirSpatialRadius: number;    // R = pixel radius for spatial resampling
     restirSpatialCount: number;     // K = number of spatial neighbors
     restirTemporalMaxM: number;     // temporal M clamp multiplier
+    // Spectral rendering
+    spectralEnabled: boolean;       // hero wavelength spectral rendering (pbrt v4 style)
 }
 
 export class WavefrontPathTracingRenderer extends Renderer {
@@ -60,6 +62,8 @@ export class WavefrontPathTracingRenderer extends Renderer {
         restirSpatialRadius: 30,
         restirSpatialCount: 5,
         restirTemporalMaxM: 20,
+        // Spectral
+        spectralEnabled: false,
     };
 
     // ------------ Accumulation State ------------
@@ -69,8 +73,14 @@ export class WavefrontPathTracingRenderer extends Renderer {
 
     // ------------ Persistent GPU Buffers ------------
     private sampleSumBuffer!: GPUBuffer;  // Persistent sum across all samples
-    private ptUniformBuffer!: GPUBuffer;  // PTUniforms (32 bytes)
+    private ptUniformBuffer!: GPUBuffer;  // PTUniforms (48 bytes)
     private ptNRCTrainDataBuffer!: GPUBuffer; // Array of NRCWavefrontTrainData
+
+    // ------------ Spectral GPU Buffers ------------
+    private spectralWavelengthBuffer!: GPUBuffer;  // per-pixel vec4f of wavelengths (nm)
+    private spectralPDFBuffer!: GPUBuffer;          // per-pixel vec4f of wavelength PDFs
+    private spectralThroughputBuffer!: GPUBuffer;   // per-pixel vec4f spectral throughput
+    private spectralAccumBuffer!: GPUBuffer;        // per-pixel vec4f spectral radiance accumulation
 
     // ------------ ReSTIR GPU Buffers ------------
     private prevReservoirBuffer!: GPUBuffer; // Previous frame reservoir
@@ -103,6 +113,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private intersectLayout!: GPUBindGroupLayout;
     private shadeLayout!: GPUBindGroupLayout;
     private shadeNRCLayout!: GPUBindGroupLayout;
+    private shadeSpectralLayout!: GPUBindGroupLayout;  // @group(2) for spectral buffers
     private shadowTestLayout!: GPUBindGroupLayout;
     private missLayout!: GPUBindGroupLayout;
     private accumulateLayout!: GPUBindGroupLayout;
@@ -145,12 +156,35 @@ export class WavefrontPathTracingRenderer extends Renderer {
         // Persistent sum across all frames (NOT cleared unless resetAccumulation() is called)
         this.sampleSumBuffer = dev.createBuffer({ label: 'PT Sample Sum',  size: this.totalPixels * 16, usage: storageUsage });
 
-        // PT Uniforms buffer: 8 × u32/f32 = 32 bytes
+        // PT Uniforms buffer: 12 × u32/f32 = 48 bytes
         this.ptUniformBuffer = dev.createBuffer({
             label: 'PT Uniforms',
-            size: 32,
+            size: 48,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+
+        // Spectral rendering buffers (always allocated, used only when spectral is enabled)
+        this.spectralWavelengthBuffer = dev.createBuffer({
+            label: 'Spectral Wavelengths',
+            size: this.totalPixels * 16, // vec4f per pixel
+            usage: storageUsage,
+        });
+        this.spectralPDFBuffer = dev.createBuffer({
+            label: 'Spectral PDFs',
+            size: this.totalPixels * 16,
+            usage: storageUsage,
+        });
+        this.spectralThroughputBuffer = dev.createBuffer({
+            label: 'Spectral Throughput',
+            size: this.totalPixels * 16,
+            usage: storageUsage,
+        });
+        this.spectralAccumBuffer = dev.createBuffer({
+            label: 'Spectral Accum',
+            size: this.totalPixels * 16,
+            usage: storageUsage,
+        });
+        console.log('[WPT] Spectral buffers created');
 
         // ptNRCTrainDataBuffer: array of NRCWavefrontTrainData (96 bytes each)
         this.ptNRCTrainDataBuffer = dev.createBuffer({
@@ -211,6 +245,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },   // camera
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },   // pt uniforms
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // ray_buffer
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // spectral_wavelengths
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // spectral_pdfs
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // spectral_throughput
             ]
         });
 
@@ -262,6 +299,16 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
+        this.shadeSpectralLayout = dev.createBindGroupLayout({
+            label: 'PT Shade Spectral Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_wavelengths
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_pdfs
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },             // spectral_throughput
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },             // spectral_accum
+            ]
+        });
+
         this.shadowTestLayout = dev.createBindGroupLayout({
             label: 'PT ShadowTest Layout',
             entries: [
@@ -287,6 +334,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },  // accum_buffer
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: 'cube' } }, // env
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, sampler: {} },                  // env sampler
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_wavelengths
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_throughput
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // spectral_accum
             ]
         });
 
@@ -296,6 +346,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },  // pt
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },  // accum_buffer (work, cleared each frame)
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },  // sample_sum_buf (persistent)
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_wavelengths
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // spectral_pdfs
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },            // spectral_accum
             ]
         });
 
@@ -420,7 +473,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         console.log('[WPT] RayGen pipeline created');
         this.intersectPipeline  = mkCompute('WPT Intersect',  shaders.ptIntersectSrc,  this.intersectLayout);
         console.log('[WPT] Intersect pipeline created');
-        this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeNRCLayout]);
+        this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeNRCLayout, this.shadeSpectralLayout]);
         console.log('[WPT] Shade pipeline created');
         this.shadowTestPipeline = mkCompute('WPT ShadowTest', shaders.ptShadowTestSrc, this.shadowTestLayout);
         console.log('[WPT] ShadowTest pipeline created');
@@ -490,7 +543,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
     // PTUniforms upload
     // ============================================================
     private uploadPTUniforms() {
-        const buf = new ArrayBuffer(32);
+        const buf = new ArrayBuffer(48);
         const u32 = new Uint32Array(buf);
         const f32 = new Float32Array(buf);
         u32[0] = this.renderWidth;
@@ -500,7 +553,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
         u32[4] = this.config.maxBounces;
         f32[5] = this.config.clampRadiance;
         f32[6] = this.config.pixelScale;
-        u32[7] = this.config.restirEnabled ? 1 : 0;
+        // When spectral is enabled, auto-disable ReSTIR (not compatible with spectral yet)
+        u32[7] = (this.config.restirEnabled && !this.config.spectralEnabled) ? 1 : 0;
+        u32[8] = this.config.spectralEnabled ? 1 : 0;
+        u32[9] = 0; // _pad0
+        u32[10] = 0; // _pad1
+        u32[11] = 0; // _pad2
         renderer.device.queue.writeBuffer(this.ptUniformBuffer, 0, buf);
     }
 
@@ -560,6 +618,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
         const restirUniformHandle = graph.importBuffer("ReSTIRUniforms", this.restirUniformBuffer);
         const sampleSumHandle = graph.importBuffer("SampleSumBuffer", this.sampleSumBuffer);
         const ptNRCTrainDataHandle = graph.importBuffer("PTNRCTrainData", this.ptNRCTrainDataBuffer);
+
+        // ---- Spectral Buffers ----
+        const specWavelengthHandle = graph.importBuffer("SpectralWavelengths", this.spectralWavelengthBuffer);
+        const specPDFHandle = graph.importBuffer("SpectralPDFs", this.spectralPDFBuffer);
+        const specThroughputHandle = graph.importBuffer("SpectralThroughput", this.spectralThroughputBuffer);
+        const specAccumHandle = graph.importBuffer("SpectralAccum", this.spectralAccumBuffer);
         
         let prevResHandle = graph.importBuffer("PrevReservoir", this.prevReservoirBuffer);
         let prevPixelDataHandle = graph.importBuffer("PrevPixelData", this.prevPixelDataBuffer);
@@ -577,8 +641,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
         graph.addGenericPass('Clear Accum Work')
             .markRoot()
             .writeBuffer(accumHandle)
+            .writeBuffer(specAccumHandle)
             .execute((enc, pass) => {
                 enc.clearBuffer(pass.getBuffer(accumHandle));
+                if (this.config.spectralEnabled) {
+                    enc.clearBuffer(pass.getBuffer(specAccumHandle));
+                }
             });
 
         // Initialize NRC states
@@ -599,6 +667,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
         graph.addComputePass('WPT RayGen')
             .readBuffer(ptUniformHandle)
             .writeBuffer(rayHandle)
+            .writeBuffer(specWavelengthHandle)
+            .writeBuffer(specPDFHandle)
+            .writeBuffer(specThroughputHandle)
             .execute((computePass, pass) => {
                 const bg = dev.createBindGroup({
                     layout: this.rayGenLayout,
@@ -606,6 +677,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 0, resource: { buffer: this.camera.uniformsBuffer } },
                         { binding: 1, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
                         { binding: 2, resource: { buffer: pass.getBuffer(rayHandle) } },
+                        { binding: 3, resource: { buffer: pass.getBuffer(specWavelengthHandle) } },
+                        { binding: 4, resource: { buffer: pass.getBuffer(specPDFHandle) } },
+                        { binding: 5, resource: { buffer: pass.getBuffer(specThroughputHandle) } },
                     ]
                 });
                 computePass.setPipeline(this.rayGenPipeline);
@@ -651,6 +725,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 .writeBuffer(shadowHandle)
                 .readBuffer(accumHandle)
                 .writeBuffer(accumHandle) // Read/Write
+                .readBuffer(specWavelengthHandle)
+                .readBuffer(specPDFHandle)
+                .readBuffer(specThroughputHandle)
+                .writeBuffer(specThroughputHandle)
+                .readBuffer(specAccumHandle)
+                .writeBuffer(specAccumHandle)
                 .execute((computePass, pass) => {
                     const bg = dev.createBindGroup({
                         layout: this.shadeLayout,
@@ -683,10 +763,22 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
                             { binding: 1, resource: { buffer: this.stage.nrc.weightsBuffer } },
                             { binding: 2, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
-                            { binding: 3, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } }, // track via RenderGraph
+                            { binding: 3, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } },
                         ]
                     });
                     computePass.setBindGroup(1, nrcBg);
+
+                    // Spectral bind group (@group(2))
+                    const spectralBg = dev.createBindGroup({
+                        layout: this.shadeSpectralLayout,
+                        entries: [
+                            { binding: 0, resource: { buffer: pass.getBuffer(specWavelengthHandle) } },
+                            { binding: 1, resource: { buffer: pass.getBuffer(specPDFHandle) } },
+                            { binding: 2, resource: { buffer: pass.getBuffer(specThroughputHandle) } },
+                            { binding: 3, resource: { buffer: pass.getBuffer(specAccumHandle) } },
+                        ]
+                    });
+                    computePass.setBindGroup(2, spectralBg);
 
                     computePass.dispatchWorkgroups(r1D, 1, 1);
                 });
@@ -861,6 +953,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 .readBuffer(hitHandle)
                 .readBuffer(accumHandle)
                 .writeBuffer(accumHandle)
+                .readBuffer(specWavelengthHandle)
+                .readBuffer(specThroughputHandle)
+                .readBuffer(specAccumHandle)
+                .writeBuffer(specAccumHandle)
                 .execute((computePass, pass) => {
                     const bg = dev.createBindGroup({
                         layout: this.missLayout,
@@ -871,6 +967,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 3, resource: { buffer: pass.getBuffer(accumHandle) } },
                             { binding: 4, resource: this.stage.environment.envCubemapView },
                             { binding: 5, resource: this.stage.environment.envSampler },
+                            { binding: 6, resource: { buffer: pass.getBuffer(specWavelengthHandle) } },
+                            { binding: 7, resource: { buffer: pass.getBuffer(specThroughputHandle) } },
+                            { binding: 8, resource: { buffer: pass.getBuffer(specAccumHandle) } },
                         ]
                     });
                     computePass.setPipeline(this.missPipeline);
@@ -947,6 +1046,10 @@ export class WavefrontPathTracingRenderer extends Renderer {
             .writeBuffer(accumHandle) // Writes zeros to it
             .readBuffer(sampleSumHandle)
             .writeBuffer(sampleSumHandle) // Adds radiance to it
+            .readBuffer(specWavelengthHandle)
+            .readBuffer(specPDFHandle)
+            .readBuffer(specAccumHandle)
+            .writeBuffer(specAccumHandle) // Cleared after conversion
             .execute((computePass, pass) => {
                 const bg = dev.createBindGroup({
                     layout: this.accumulateLayout,
@@ -954,6 +1057,9 @@ export class WavefrontPathTracingRenderer extends Renderer {
                         { binding: 0, resource: { buffer: pass.getBuffer(ptUniformHandle) } },
                         { binding: 1, resource: { buffer: pass.getBuffer(accumHandle) } },
                         { binding: 2, resource: { buffer: pass.getBuffer(sampleSumHandle) } },
+                        { binding: 3, resource: { buffer: pass.getBuffer(specWavelengthHandle) } },
+                        { binding: 4, resource: { buffer: pass.getBuffer(specPDFHandle) } },
+                        { binding: 5, resource: { buffer: pass.getBuffer(specAccumHandle) } },
                     ]
                 });
                 computePass.setPipeline(this.accumulatePipeline);
