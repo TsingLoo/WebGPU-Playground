@@ -29,11 +29,15 @@ fn ACESFilm(x: vec3f) -> vec3f {
 
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4f) -> @location(0) vec4f {
-    let render_width  = u32(f32(pt.width)  * pt.pixel_scale);
-    let render_height = u32(f32(pt.height) * pt.pixel_scale);
+    let render_width  = pt.width;
+    let render_height = pt.height;
+
+    // Recover canvas dimensions: pt.width/height are the render resolution (already scaled)
+    let canvas_width  = f32(pt.width)  / pt.pixel_scale;
+    let canvas_height = f32(pt.height) / pt.pixel_scale;
 
     // Map canvas pixel to render-resolution pixel
-    let uv = frag_pos.xy / vec2f(f32(pt.width), f32(pt.height));
+    let uv = frag_pos.xy / vec2f(canvas_width, canvas_height);
     let render_px = vec2u(uv * vec2f(f32(render_width), f32(render_height)));
     let safe_u = clamp(render_px.x, 0u, render_width - 1u);
     let safe_v = clamp(render_px.y, 0u, render_height - 1u);

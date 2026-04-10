@@ -4,6 +4,14 @@
 // NOTE: bvh.wgsl already defines `struct Ray { origin, direction }`.
 
 // ============================================================
+// sRGB / Linear Color Space Conversion
+// ============================================================
+fn srgbToLinear(c: vec3f) -> vec3f {
+    // Approximate sRGB EOTF: gamma 2.2 decode
+    return pow(max(c, vec3f(0.0)), vec3f(2.2));
+}
+
+// ============================================================
 // Path Tracing Structs
 // ============================================================
 
@@ -125,7 +133,8 @@ fn sampleCosineHemisphere(n: vec3f, rng: ptr<function, u32>) -> vec3f {
     let cosTheta = sqrt(r1);
     let sinTheta = sqrt(max(0.0, 1.0 - r1));
     let phi = 2.0 * PI * r2;
-    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(n.x) > 0.9);
+    // Use Z axis when n is near Y axis to avoid degenerate cross product
+    let up = select(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), abs(n.y) < 0.9);
     let tangent   = normalize(cross(n, up));
     let bitangent = cross(n, tangent);
     return normalize(tangent * (sinTheta * cos(phi)) + bitangent * (sinTheta * sin(phi)) + n * cosTheta);
@@ -140,7 +149,8 @@ fn sampleGGX(n: vec3f, roughness: f32, rng: ptr<function, u32>) -> vec3f {
     let lx = sin(theta) * cos(phi);
     let ly = sin(theta) * sin(phi);
     let lz = cos(theta);
-    let up = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(n.x) > 0.9);
+    // Use Z axis when n is near Y axis to avoid degenerate cross product
+    let up = select(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), abs(n.y) < 0.9);
     let tangent   = normalize(cross(n, up));
     let bitangent = cross(n, tangent);
     return normalize(tangent * lx + bitangent * ly + n * lz);
@@ -162,14 +172,14 @@ fn unpackPTMaterial(
     m.alpha            = r0.w;
     m.roughness        = r1.x;
     m.metallic         = r1.y;
-    m.tex_layer        = bitcast<i32>(r1.z);
+    m.tex_layer        = i32(r1.z);
     m.transmission     = r1.w;
     m.ior              = r2.x;
     m.emissive         = r2.yzw;
-    m.normal_tex_layer = bitcast<i32>(r3.x);
-    m.mr_tex_layer     = bitcast<i32>(r3.y);
+    m.normal_tex_layer = i32(r3.x);
+    m.mr_tex_layer     = i32(r3.y);
     m.alpha_cutoff     = r3.z;
-    m.alpha_mode       = bitcast<u32>(r3.w);
+    m.alpha_mode       = u32(r3.w);
     return m;
 }
 

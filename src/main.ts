@@ -534,7 +534,7 @@ modelFileInput.addEventListener('change', async (event) => {
         const buffer = await file.arrayBuffer();
 
         const newScene = new Scene();
-        const result = await loadGltfBuffer(buffer, 0, 0); // brand new scene starts from offset 0
+        const result = await loadGltfBuffer(buffer, newScene.materialCount, newScene.layerCount);
         newScene.root.addChild(result.rootEntity);
         
         await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.baseColorImages.length);
