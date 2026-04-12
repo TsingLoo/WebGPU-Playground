@@ -298,7 +298,7 @@ A spectral path tracing mode is implemented using the hero-wavelength approach (
 
 ### Spectral Rendering Comparison
 
-![Spectral Rendering On / Off](./img/spectral_on_off.png)
+![Spectral Rendering On](./img/chrome_WfIF9BLH1u.jpg)
 
 ---
 
