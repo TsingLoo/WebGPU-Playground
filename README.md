@@ -291,12 +291,6 @@ graph TD
 ## Spectral Path Tracing & Dispersion
 
 A spectral path tracing mode is implemented using the hero-wavelength approach (inspired by pbrt v4).
-- **CIE Color Matching**: Uses Wyman Gaussian for accurate spectrum-to-RGB conversion, along with Smits RGB-to-Spectrum logic.
-- **Dispersion**: Supports Cauchy's equation for modeling wavelength-dependent index of refraction (IOR), producing realistic chromatic aberration and prism effects.
-- **Throughput & Light Transport**: Traces 4 hero wavelengths per pixel simultaneously to efficiently estimate full spectral transport.
-- **Toggleable**: Users can seamlessly turn this on or off via the GUI.
-
-### Spectral Rendering Comparison
 
 ![Spectral Rendering On](./img/chrome_WfIF9BLH1u.jpg)
 
