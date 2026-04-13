@@ -1,13 +1,17 @@
 // bvh.wgsl
 // WGSL implementation of three-mesh-bvh traversal
 
-const BVH_STACK_DEPTH = 60u;
+const BVH_STACK_DEPTH = 24u;
 const INFINITY = 1e20;
-const TRI_INTERSECT_EPSILON = 1e-5;
+// Reduced from 1e-5 to 1e-8 to allow intersection with very small triangles 
+// (e.g. detailed glTF models like the chess pieces) without returning false-negative misses.
+const TRI_INTERSECT_EPSILON = 1e-8;
 
 struct Ray {
     origin: vec3f,
     direction: vec3f,
+    invDirection: vec3f,
+    dirSign: vec3u,
 };
 
 struct BVHBoundingBox {
@@ -34,9 +38,11 @@ fn intersectsBounds(ray: Ray, bounds: BVHBoundingBox, dist: ptr<function, f32>) 
     let boundsMin = vec3f(bounds.min[0], bounds.min[1], bounds.min[2]);
     let boundsMax = vec3f(bounds.max[0], bounds.max[1], bounds.max[2]);
 
-    let invDir = 1.0 / ray.direction;
-    let tMinPlane = (boundsMin - ray.origin) * invDir;
-    let tMaxPlane = (boundsMax - ray.origin) * invDir;
+    let invDir = ray.invDirection;
+    let negOriginInvDir = -ray.origin * invDir;
+    
+    let tMinPlane = fma(boundsMin, invDir, negOriginInvDir);
+    let tMaxPlane = fma(boundsMax, invDir, negOriginInvDir);
 
     let tMinHit = vec3f(min(tMinPlane.x, tMaxPlane.x), min(tMinPlane.y, tMaxPlane.y), min(tMinPlane.z, tMaxPlane.z));
     let tMaxHit = vec3f(max(tMinPlane.x, tMaxPlane.x), max(tMinPlane.y, tMaxPlane.y), max(tMinPlane.z, tMaxPlane.z));
@@ -91,21 +97,42 @@ fn intersectTriangles(
     closestResult.didHit = false;
     closestResult.dist = INFINITY;
 
-    for (var i = offset; i < offset + count; i = i + 1u) {
-        let indices = bvh_index[i];
-        let a = bvh_position[indices.x].xyz;
-        let b = bvh_position[indices.y].xyz;
-        let c = bvh_position[indices.z].xyz;
-
-        var triResult = intersectsTriangle(ray, a, b, c);
-
+    if (0u < count) {
+        let indices = bvh_index[offset + 0u];
+        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
         if (triResult.didHit && triResult.dist < closestResult.dist) {
             closestResult = triResult;
-            closestResult.indices = vec4u(indices.xyz, indices.w); // w = matId
+            closestResult.indices = vec4u(indices.xyz, indices.w);
+        }
+    }
+    if (1u < count) {
+        let indices = bvh_index[offset + 1u];
+        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
+        if (triResult.didHit && triResult.dist < closestResult.dist) {
+            closestResult = triResult;
+            closestResult.indices = vec4u(indices.xyz, indices.w);
+        }
+    }
+    if (2u < count) {
+        let indices = bvh_index[offset + 2u];
+        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
+        if (triResult.didHit && triResult.dist < closestResult.dist) {
+            closestResult = triResult;
+            closestResult.indices = vec4u(indices.xyz, indices.w);
+        }
+    }
+    if (3u < count) {
+        let indices = bvh_index[offset + 3u];
+        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
+        if (triResult.didHit && triResult.dist < closestResult.dist) {
+            closestResult = triResult;
+            closestResult.indices = vec4u(indices.xyz, indices.w);
         }
     }
     return closestResult;
 }
+
+var<private> bvh_stack: array<u32, BVH_STACK_DEPTH>;
 
 fn bvhIntersectFirstHit(
     bvh: ptr<storage, array<BVHNode>, read>,
@@ -114,8 +141,7 @@ fn bvhIntersectFirstHit(
     ray: Ray
 ) -> IntersectionResult {
     var pointer = 0;
-    var stack: array<u32, BVH_STACK_DEPTH>;
-    stack[0] = 0u;
+    bvh_stack[0] = 0u;
 
     var bestHit: IntersectionResult;
     bestHit.didHit = false;
@@ -124,18 +150,18 @@ fn bvhIntersectFirstHit(
     loop {
         if (pointer < 0 || pointer >= i32(BVH_STACK_DEPTH)) { break; }
 
-        let currNodeIndex = stack[pointer];
-        let node = bvh[currNodeIndex];
+        let currNodeIndex = bvh_stack[pointer];
         pointer = pointer - 1;
 
         var boundsHitDistance: f32 = 0.0;
+        let bounds = bvh[currNodeIndex].bounds;
 
-        if (!intersectsBounds(ray, node.bounds, &boundsHitDistance) || boundsHitDistance > bestHit.dist) {
+        if (!intersectsBounds(ray, bounds, &boundsHitDistance) || boundsHitDistance > bestHit.dist) {
             continue;
         }
 
-        let boundsInfox = node.splitAxisOrTriangleCount;
-        let boundsInfoy = node.rightChildOrTriangleOffset;
+        let boundsInfox = bvh[currNodeIndex].splitAxisOrTriangleCount;
+        let boundsInfoy = bvh[currNodeIndex].rightChildOrTriangleOffset;
         let isLeaf = (boundsInfox & 0xffff0000u) != 0u;
 
         if (isLeaf) {
@@ -152,15 +178,23 @@ fn bvhIntersectFirstHit(
             let splitAxis = boundsInfox & 0x0000ffffu;
             let rightIndex = currNodeIndex + boundsInfoy;
 
+            // Optional enhancement: read ray.dirSign to replace select, 
+            // but for safety we use the standard check.
             let leftToRight = ray.direction[splitAxis] >= 0.0;
             let c1 = select(rightIndex, leftIndex, leftToRight);
             let c2 = select(leftIndex, rightIndex, leftToRight);
 
-            pointer = pointer + 1;
-            stack[pointer] = c2;
+            // Stack Protection: If we're about to exceed local BVH_STACK_DEPTH, 
+            // safely discard deeper traversal instead of triggering an out-of-bounds error.
+            if (pointer >= i32(BVH_STACK_DEPTH) - 2) {
+                continue;
+            }
 
             pointer = pointer + 1;
-            stack[pointer] = c1;
+            bvh_stack[pointer] = c2;
+
+            pointer = pointer + 1;
+            bvh_stack[pointer] = c1;
         }
     }
 

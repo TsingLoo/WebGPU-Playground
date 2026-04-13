@@ -161,7 +161,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
 
     // Composite and tone map (shared)
     let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;
-    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, isGIActive);
+    let corrected = compositeAndTonemap(Lo, ibl.kD, diffuseAmbient, ibl.specularIBL, ao, surf.emissive, isGIActive);
 
     // Detect NaN
     if (corrected.x != corrected.x || corrected.y != corrected.y || corrected.z != corrected.z) {

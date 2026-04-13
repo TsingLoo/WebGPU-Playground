@@ -9,9 +9,9 @@ import { registerLoaders, load, parse } from '@loaders.gl/core';
 import { GLTFLoader, GLTFWithBuffers, GLTFMesh, GLTFMeshPrimitive, GLTFMaterial, GLTFSampler } from '@loaders.gl/gltf';
 import { ImageLoader } from '@loaders.gl/images';
 import { mat4 } from 'wgpu-matrix';
-import { BVHData, buildBVHFromScene } from '../stage/bvh_builder';
 import { Entity } from './Entity';
 import { MeshRenderer } from './components/MeshRenderer';
+import { DirectionalLightComponent, PointLightComponent } from './components/LightComponent';
 import { device, globalUniformPool, materialBindGroupLayout } from '../renderer';
 import { bindGroupAllocator } from './BindGroupAllocator';
 
@@ -76,7 +76,7 @@ export class Material {
 
     materialBindGroup: GPUBindGroup;
 
-    constructor(materialId: number, gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
+    constructor(materialId: number, gltfMaterial: GLTFMaterial, texturesSRGB: Texture[], texturesLinear: Texture[], texturesEmissive: Texture[], defaultTextureSRGB: Texture, defaultTextureLinear: Texture) {
         this.id = materialId;
         this.isOpaque = (gltfMaterial.alphaMode !== 'MASK' && gltfMaterial.alphaMode !== 'BLEND');
 
@@ -97,12 +97,18 @@ export class Material {
         const metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? 1.0;
         const baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? [1.0, 1.0, 1.0, 1.0];
 
+        // Emissive texture uses sRGB or linear (typically sRGB)
+        const emissiveTexIndex = (gltfMaterial as any).emissiveTexture?.index;
+        const emissiveTexture = (emissiveTexIndex != null && emissiveTexIndex < texturesEmissive.length) ? texturesEmissive[emissiveTexIndex] : defaultTextureSRGB;
+
         // Flag: does this material have a metallic-roughness texture?
         const hasMRTexture = (mrTexIndex != null && mrTexIndex < texturesLinear.length) ? 1.0 : 0.0;
         const hasNormalTexture = (normalTexIndex != null && normalTexIndex < texturesLinear.length) ? 1.0 : 0.0;
-
-
-        // vec4f[2]: reserved
+        const hasEmissiveTexture = (emissiveTexIndex != null && emissiveTexIndex < texturesEmissive.length) ? 1.0 : 0.0;
+        
+        const emissiveFactor: number[] = (gltfMaterial as any).emissiveFactor ?? [0.0, 0.0, 0.0];
+        const emissiveStrengthExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
+        const emissiveStrength: number = emissiveStrengthExt?.emissiveStrength ?? 1.0;
         
         // Allocate 48 bytes (3 vec4f). UniformPool handles 256-byte alignment internally if we set size carefully, 
         // wait, UniformPool.allocate aligns by 256, so allocating 48 gives us a 256-stride chunk which is safe.
@@ -110,12 +116,12 @@ export class Material {
         poolAlloc.view.set([
             roughness, metallic, hasMRTexture, hasNormalTexture,
             baseColorFactor[0], baseColorFactor[1], baseColorFactor[2], baseColorFactor[3],
-            0.0, 0.0, 0.0, 0.0
+            emissiveFactor[0] * emissiveStrength, emissiveFactor[1] * emissiveStrength, emissiveFactor[2] * emissiveStrength, hasEmissiveTexture
         ]);
         globalUniformPool.markDirty(poolAlloc.offset, poolAlloc.sizeBytes);
 
         // Compute a deterministic cache key for this material bind group
-        const cacheKey = `mat_${roughness.toFixed(2)}_${metallic.toFixed(2)}_${texIndex}_${mrTexIndex}_${normalTexIndex}_${baseColorFactor.join(',')}`;
+        const cacheKey = `mat_${roughness.toFixed(2)}_${metallic.toFixed(2)}_${texIndex}_${mrTexIndex}_${normalTexIndex}_${emissiveTexIndex}_${baseColorFactor.join(',')}_${emissiveFactor.join(',')}`;
 
         this.materialBindGroup = bindGroupAllocator.getBindGroup(device, {
             label: `material bind group ${materialId}`,
@@ -152,6 +158,14 @@ export class Material {
                 {
                     binding: 6,
                     resource: normalTexture.sampler
+                },
+                {
+                    binding: 7,
+                    resource: emissiveTexture.image.createView()
+                },
+                {
+                    binding: 8,
+                    resource: emissiveTexture.sampler
                 }
             ]
         }, cacheKey);
@@ -168,6 +182,8 @@ export class Primitive {
     cpuPositions?: Float32Array;
     cpuIndices?: Uint32Array;
     cpuUVs?: Float32Array;
+    cpuNormals?: Float32Array;
+    cpuTangents?: Float32Array;
 
     constructor(gltfPrim: GLTFMeshPrimitive, gltfWithBuffers: GLTFWithBuffers, material: Material) {
         this.material = material;
@@ -196,8 +212,13 @@ export class Primitive {
 
         const positionsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.POSITION);
         const normalsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.NORMAL);
-        const uvsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.TEXCOORD_0);
-
+        let uvsArray: Float32Array;
+        if (gltfPrim.attributes.TEXCOORD_0 != null) {
+            uvsArray = getFloatArray(gltfWithBuffers, gltfPrim.attributes.TEXCOORD_0);
+        } else {
+            const numVerts = positionsArray.length / 3;
+            uvsArray = new Float32Array(numVerts * 2);
+        }
         // Load tangent data (vec4f: xyz = tangent direction, w = handedness +1/-1)
         let tangentsArray: Float32Array | null = null;
         if (gltfPrim.attributes.TANGENT != null) {
@@ -254,6 +275,18 @@ export class Primitive {
         this.cpuPositions = positionsArray;
         this.cpuIndices = indicesArray;
         this.cpuUVs = new Float32Array(uvsArray);
+        this.cpuNormals = new Float32Array(normalsArray);
+        // Save tangents (4 floats per vertex: xyz=tangent, w=handedness)
+        if (tangentsArray) {
+            this.cpuTangents = new Float32Array(tangentsArray);
+        } else {
+            // Generate default tangents
+            const defaultTan = new Float32Array(numVerts * 4);
+            for (let i = 0; i < numVerts; i++) {
+                defaultTan[i * 4] = 1.0; defaultTan[i * 4 + 1] = 0; defaultTan[i * 4 + 2] = 0; defaultTan[i * 4 + 3] = 1.0;
+            }
+            this.cpuTangents = defaultTan;
+        }
     }
 }
 
@@ -372,33 +405,65 @@ export class GLTFLoaderParams {
     public voxelBoundsMax = [15, 15, 10];
 }
 
+export interface GLTFResult {
+    rootEntity: Entity;
+    materialDataArray: Float32Array;
+    materialCount: number;
+    baseColorImages: GPUTexture[];
+    normalMapImages: GPUTexture[];
+    mrImages: GPUTexture[];
+    emissiveImages: GPUTexture[];
+}
+
 export class GLTFResult {
     public rootEntity: Entity;
     public materialDataArray: Float32Array;
     public materialCount: number;
     public baseColorImages: GPUTexture[];
+    public normalMapImages: GPUTexture[];
+    public mrImages: GPUTexture[];
+    public emissiveImages: GPUTexture[];
     
-    constructor(root: Entity, materialData: Float32Array, materialCount: number, baseColorImages: GPUTexture[]) {
+    constructor(root: Entity, materialData: Float32Array, materialCount: number, baseColorImages: GPUTexture[], normalMapImages: GPUTexture[], mrImages: GPUTexture[], emissiveImages: GPUTexture[]) {
         this.rootEntity = root;
         this.materialDataArray = materialData;
         this.materialCount = materialCount;
         this.baseColorImages = baseColorImages;
+        this.normalMapImages = normalMapImages;
+        this.mrImages = mrImages;
+        this.emissiveImages = emissiveImages;
     }
 }
 
-export async function loadGltfBuffer(buffer: ArrayBuffer, matOffset: number = 0, layerOffset: number = 0, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+export async function loadGltfBuffer(buffer: ArrayBuffer, matOffset: number = 0, layerOffset: number = 0): Promise<GLTFResult> {
     const gltfWithBuffers = await parse(buffer, GLTFLoader) as unknown as GLTFWithBuffers;
-    return processGltf(gltfWithBuffers, matOffset, layerOffset, params);
+    return processGltf(gltfWithBuffers, matOffset, layerOffset);
 }
 
-export async function loadGltf(filePath: string, matOffset: number = 0, layerOffset: number = 0, params: GLTFLoaderParams = new GLTFLoaderParams()): Promise<GLTFResult> {
+export async function loadGltf(filePath: string, matOffset: number = 0, layerOffset: number = 0): Promise<GLTFResult> {
     const gltfWithBuffers = await load(filePath) as GLTFWithBuffers;
-    return processGltf(gltfWithBuffers, matOffset, layerOffset, params);
+    if (filePath.endsWith('.gltf')) {
+        try {
+            const rawResponse = await fetch(filePath);
+            const rawJson = await rawResponse.json();
+            return processGltf(gltfWithBuffers, matOffset, layerOffset, rawJson);
+        } catch (e) {
+            console.warn("Failed to fetch raw JSON to restore extensions:", e);
+        }
+    }
+    return processGltf(gltfWithBuffers, matOffset, layerOffset);
 }
 
-async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number, params: GLTFLoaderParams): Promise<GLTFResult> {
+async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset: number, originalJSON?: any): Promise<GLTFResult> {
 
         const gltf = gltfWithBuffers.json;
+        if (originalJSON?.materials) {
+            for (let i = 0; i < gltf.materials.length; i++) {
+                if (originalJSON.materials[i].extensions) {
+                    gltf.materials[i].extensions = originalJSON.materials[i].extensions;
+                }
+            }
+        }
 
         // Create default white 1x1 textures (sRGB for baseColor, linear for MR)
         const defaultGpuTexSRGB = device.createTexture({
@@ -430,6 +495,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         // Build sRGB and linear image arrays from all images
         let sceneTexturesSRGB: Texture[] = [];  // for baseColor (sRGB encoded)
         let sceneTexturesLinear: Texture[] = []; // for metallic-roughness (linear data)
+        let sceneTexturesEmissive: Texture[] = sceneTexturesSRGB; // for emissive
         {
             let sceneImagesSRGB: GPUTexture[] = [];
             let sceneImagesLinear: GPUTexture[] = [];
@@ -459,7 +525,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         }
 
         // Resize images for baseColor texture array directly into GPUTextures
-        const TEX_ARRAY_SIZE = 256;
+        const TEX_ARRAY_SIZE = 1024;
         let baseColorImages: GPUTexture[] = [];
         
         if (gltfWithBuffers.images) {
@@ -468,7 +534,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 const resized = await createImageBitmap(srcBitmap, {
                     resizeWidth: TEX_ARRAY_SIZE,
                     resizeHeight: TEX_ARRAY_SIZE,
-                    resizeQuality: 'medium',
+                    resizeQuality: 'high',
                 });
                 
                 const tempTex = device.createTexture({
@@ -489,49 +555,165 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
             }
         }
 
+        // Build normal map image array (resized to TEX_ARRAY_SIZE, linear format)
+        let normalMapImages: GPUTexture[] = [];
+        if (gltfWithBuffers.images) {
+            for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
+                const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
+                const resized = await createImageBitmap(srcBitmap, {
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
+                });
+                const tempTex = device.createTexture({
+                    size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                device.queue.copyExternalImageToTexture({ source: resized }, { texture: tempTex }, { width: TEX_ARRAY_SIZE, height: TEX_ARRAY_SIZE });
+                normalMapImages.push(tempTex);
+                resized.close();
+            }
+        }
+
+        // Build metallic-roughness image array
+        let mrImages: GPUTexture[] = [];
+        if (gltfWithBuffers.images) {
+            for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
+                const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
+                const resized = await createImageBitmap(srcBitmap, {
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
+                });
+                const tempTex = device.createTexture({
+                    size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                device.queue.copyExternalImageToTexture({ source: resized }, { texture: tempTex }, { width: TEX_ARRAY_SIZE, height: TEX_ARRAY_SIZE });
+                mrImages.push(tempTex);
+                resized.close();
+            }
+        }
+
+        // Build emissive image array
+        let emissiveImages: GPUTexture[] = [];
+        if (gltfWithBuffers.images) {
+            for (let imgIdx = 0; imgIdx < gltfWithBuffers.images.length; imgIdx++) {
+                const srcBitmap = gltfWithBuffers.images[imgIdx] as ImageBitmap;
+                const resized = await createImageBitmap(srcBitmap, {
+                    resizeWidth: TEX_ARRAY_SIZE, resizeHeight: TEX_ARRAY_SIZE, resizeQuality: 'high',
+                });
+                const tempTex = device.createTexture({
+                    size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1], format: 'rgba8unorm', dimension: '2d',
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                device.queue.copyExternalImageToTexture({ source: resized }, { texture: tempTex }, { width: TEX_ARRAY_SIZE, height: TEX_ARRAY_SIZE });
+                emissiveImages.push(tempTex);
+                resized.close();
+            }
+        }
+
         // Build material → texture layer mapping
         const numImages = baseColorImages.length;
-        function getBaseColorImageLayer(gltfMat: any): number {
-            const texIdx = gltfMat.pbrMetallicRoughness?.baseColorTexture?.index;
+        function getImageLayer(gltfMat: any, texAccessor: (m: any) => any): number {
+            const texIdx = texAccessor(gltfMat);
             if (texIdx == null || !gltf.textures || texIdx >= gltf.textures.length) return -1;
             const source = gltf.textures[texIdx].source;
             if (source == null || source < 0 || source >= numImages) return -1;
             return source;
         }
+        function getBaseColorImageLayer(gltfMat: any): number {
+            return getImageLayer(gltfMat, m => m.pbrMetallicRoughness?.baseColorTexture?.index);
+        }
+        function getNormalMapImageLayer(gltfMat: any): number {
+            return getImageLayer(gltfMat, m => (m as any).normalTexture?.index);
+        }
+        function getMRImageLayer(gltfMat: any): number {
+            return getImageLayer(gltfMat, m => m.pbrMetallicRoughness?.metallicRoughnessTexture?.index);
+        }
+        function getEmissiveImageLayer(gltfMat: any): number {
+            return getImageLayer(gltfMat, m => (m as any).emissiveTexture?.index);
+        }
 
         let sceneMaterials: Material[] = [];
         const materialCount = Math.max(1, gltf.materials?.length ?? 0);
-        let materialDataArray: Float32Array = new Float32Array(materialCount * 8); // 8 floats per material (32 bytes)
+        // 20 floats per material (80 bytes):
+        // [0-3]: baseColorFactor (rgba)
+        // [4]:   roughness
+        // [5]:   metallic
+        // [6]:   texLayer (f32)
+        // [7]:   transmission
+        // [8]:   ior
+        // [9-11]: emissiveFactor (rgb) // actually 12 is free? Wait, 12 is normal_tex_layer. emissive is only 3 floats, so 11 is z.
+        // [12]:  normal_tex_layer (f32)
+        // [13]:  mr_tex_layer (f32)
+        // [14]:  alpha_cutoff
+        // [15]:  alpha_mode
+        // [16]:  emissive_tex_layer (f32)
+        let materialDataArray: Float32Array = new Float32Array(materialCount * 20);
         let defaultBaseColor = [1.0, 1.0, 1.0, 1.0];
         let defaultRoughness = 1.0;
-        let defaultMetallic = 1.0;
+        let defaultMetallic = 1.0;  // glTF 2.0 spec default
 
         if (gltf.materials) {
             for (let i = 0; i < gltf.materials.length; i++) {
                 let gltfMaterial = gltf.materials[i];
-                let currentMat = new Material(i + matOffset, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, defaultTextureSRGB, defaultTextureLinear);
+                let currentMat = new Material(i + matOffset, gltfMaterial, sceneTexturesSRGB, sceneTexturesLinear, sceneTexturesEmissive, defaultTextureSRGB, defaultTextureLinear);
                 // TEST: Assign the 'unlit' variant to the Lion
                 if (gltfMaterial.name && gltfMaterial.name.toLowerCase().includes("lion")) {
                     currentMat.type = "unlit";
                 }
                 sceneMaterials.push(currentMat);
                 
-                // Pack for global materials buffer
+                // Pack PBR base properties
                 let baseColorFactor = gltfMaterial.pbrMetallicRoughness?.baseColorFactor ?? defaultBaseColor;
                 let roughness = gltfMaterial.pbrMetallicRoughness?.roughnessFactor ?? defaultRoughness;
                 let metallic = gltfMaterial.pbrMetallicRoughness?.metallicFactor ?? defaultMetallic;
                 let texLayer = getBaseColorImageLayer(gltfMaterial);
                 if (texLayer >= 0) texLayer += layerOffset;
+                let normalTexLayer = getNormalMapImageLayer(gltfMaterial);
+                if (normalTexLayer >= 0) normalTexLayer += layerOffset;
+                let mrTexLayer = getMRImageLayer(gltfMaterial);
+                if (mrTexLayer >= 0) mrTexLayer += layerOffset;
 
-                materialDataArray[i * 8 + 0] = baseColorFactor[0] ?? 1.0;
-                materialDataArray[i * 8 + 1] = baseColorFactor[1] ?? 1.0;
-                materialDataArray[i * 8 + 2] = baseColorFactor[2] ?? 1.0;
-                materialDataArray[i * 8 + 3] = baseColorFactor[3] ?? 1.0;
-                materialDataArray[i * 8 + 4] = roughness;
-                materialDataArray[i * 8 + 5] = metallic;
-                // Use bitwise cast: store i32 layer index as f32 bits
-                new Int32Array(materialDataArray.buffer, (i * 8 + 6) * 4, 1)[0] = texLayer;
-                materialDataArray[i * 8 + 7] = 0.0; // pad
+                let emissiveTexLayer = getEmissiveImageLayer(gltfMaterial);
+                if (emissiveTexLayer >= 0) emissiveTexLayer += layerOffset;
+
+                // KHR_materials_transmission: transmissionFactor (0-1)
+                const transmissionExt = (gltfMaterial as any).extensions?.KHR_materials_transmission;
+                let transmission: number = transmissionExt?.transmissionFactor ?? 0.0;
+
+                // KHR_materials_ior: IOR value (default 1.5 for glass)
+                const iorExt = (gltfMaterial as any).extensions?.KHR_materials_ior;
+                const ior: number = iorExt?.ior ?? 1.5;
+
+                // Emissive factor (core glTF 2.0 + KHR_materials_emissive_strength)
+                const emissiveFactor: number[] = (gltfMaterial as any).emissiveFactor ?? [0.0, 0.0, 0.0];
+                const emissiveStrengthExt = (gltfMaterial as any).extensions?.KHR_materials_emissive_strength;
+                const emissiveStrength: number = emissiveStrengthExt?.emissiveStrength ?? 1.0;
+
+                const base = i * 20;
+                materialDataArray[base + 0] = baseColorFactor[0] ?? 1.0;
+                materialDataArray[base + 1] = baseColorFactor[1] ?? 1.0;
+                materialDataArray[base + 2] = baseColorFactor[2] ?? 1.0;
+                materialDataArray[base + 3] = baseColorFactor[3] ?? 1.0;
+                materialDataArray[base + 4] = roughness;
+                materialDataArray[base + 5] = metallic;
+                // Store layer index as plain f32 (avoids NaN issues with bitcast trick)
+                materialDataArray[base + 6] = texLayer;
+                materialDataArray[base + 7] = transmission;
+                materialDataArray[base + 8] = ior;
+                materialDataArray[base + 9]  = emissiveFactor[0] * emissiveStrength;
+                materialDataArray[base + 10] = emissiveFactor[1] * emissiveStrength;
+                materialDataArray[base + 11] = emissiveFactor[2] * emissiveStrength;
+                let alphaModeEnum = 0; // OPAQUE
+                if (gltfMaterial.alphaMode === "MASK") alphaModeEnum = 1;
+                else if (gltfMaterial.alphaMode === "BLEND") alphaModeEnum = 2;
+
+                materialDataArray[base + 12] = normalTexLayer;
+                materialDataArray[base + 13] = mrTexLayer;
+                materialDataArray[base + 14] = gltfMaterial.alphaCutoff ?? 0.5;
+                materialDataArray[base + 15] = alphaModeEnum;
+                materialDataArray[base + 16] = emissiveTexLayer;
+                materialDataArray[base + 17] = 0.0;
+                materialDataArray[base + 18] = 0.0;
+                materialDataArray[base + 19] = 0.0;
             }
         }
 
@@ -544,6 +726,10 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
         sceneRoot.name = "scene root";
         // sceneRoot.setParent(this.root);
 
+        // Parse KHR_lights_punctual extension if present
+        const lightsExt = (gltf as any).extensions?.KHR_lights_punctual;
+        const gltfLights: any[] = lightsExt?.lights ?? [];
+
         let sceneNodes: Entity[] = [];
         for (let gltfNode of gltf.nodes!) {
             let newNode = new Entity();
@@ -555,6 +741,47 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
                 const mr = new MeshRenderer();
                 mr.setMesh(sceneMeshes[gltfNode.mesh]);
                 newNode.addComponent(mr);
+            }
+
+            // KHR_lights_punctual: attach light component if this node references a light
+            const nodeLightExt = (gltfNode as any).extensions?.KHR_lights_punctual;
+            if (nodeLightExt != null && nodeLightExt.light != null) {
+                const lightIdx = nodeLightExt.light;
+                if (lightIdx < gltfLights.length) {
+                    const gltfLight = gltfLights[lightIdx];
+                    const lightType: string = gltfLight.type; // 'directional' | 'point' | 'spot'
+                    const color: number[] = gltfLight.color ?? [1, 1, 1];
+                    const intensity: number = gltfLight.intensity ?? 1.0;
+
+                    if (lightType === 'directional') {
+                        const dirLight = new DirectionalLightComponent();
+                        // glTF directional lights shine down -Z in local space.
+                        // The node's transform will rotate this. We store the local-space default.
+                        dirLight.direction = [0, 0, -1];
+                        dirLight.color = [color[0], color[1], color[2]];
+                        dirLight.intensity = intensity;
+                        newNode.addComponent(dirLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Directional Light';
+                        console.log(`[GLTFLoader] Parsed directional light: ${newNode.name} (intensity=${intensity})`);
+                    } else if (lightType === 'point') {
+                        const ptLight = new PointLightComponent();
+                        ptLight.color = [color[0], color[1], color[2]];
+                        ptLight.intensity = intensity;
+                        ptLight.radius = gltfLight.range ?? 10.0;
+                        newNode.addComponent(ptLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Point Light';
+                        console.log(`[GLTFLoader] Parsed point light: ${newNode.name} (intensity=${intensity}, range=${ptLight.radius})`);
+                    } else if (lightType === 'spot') {
+                        // Treat spot lights as point lights for now (no spot support in engine)
+                        const ptLight = new PointLightComponent();
+                        ptLight.color = [color[0], color[1], color[2]];
+                        ptLight.intensity = intensity;
+                        ptLight.radius = gltfLight.range ?? 10.0;
+                        newNode.addComponent(ptLight);
+                        if (!newNode.name || newNode.name === 'Entity') newNode.name = gltfLight.name ?? 'Spot Light';
+                        console.log(`[GLTFLoader] Parsed spot light as point: ${newNode.name} (intensity=${intensity})`);
+                    }
+                }
             }
 
 
@@ -591,7 +818,7 @@ async function processGltf(gltfWithBuffers: any, matOffset: number, layerOffset:
 
         sceneRoot.updateWorldTransform();
         
-        return new GLTFResult(sceneRoot, materialDataArray, materialCount, baseColorImages);
+        return new GLTFResult(sceneRoot, materialDataArray, materialCount, baseColorImages, normalMapImages, mrImages, emissiveImages);
 }
 
 export function buildVoxelGrid(rootEntity: Entity, params: GLTFLoaderParams = new GLTFLoaderParams()): {voxelGrid: GPUTexture, voxelGridView: GPUTextureView} {

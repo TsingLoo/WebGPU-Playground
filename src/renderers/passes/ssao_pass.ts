@@ -1,49 +1,24 @@
 import * as renderer from '../../renderer';
 import * as shaders from '../../shaders/shaders';
+import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 
 export interface SSAOPassDeps {
     cameraBuffer: GPUBuffer;
-    hizTextureView: GPUTextureView;
-    gBufferNormalView: GPUTextureView;
     ssaoUniformsBuffer: GPUBuffer;
 }
 
 export class SSAOPass {
-    private ssaoTexture: GPUTexture;
-    private ssaoTextureView: GPUTextureView;
-
-    private blurredTexture: GPUTexture;
-    private _blurredTextureView: GPUTextureView;
-
     private ssaoPipeline: GPURenderPipeline;
-    private ssaoBindGroup: GPUBindGroup;
-
     private blurPipeline: GPURenderPipeline;
-    private blurBindGroup: GPUBindGroup;
 
-    /** Exposed for shading bind groups that need the AO result */
-    get blurredTextureView(): GPUTextureView {
-        return this._blurredTextureView;
-    }
+    private deps: SSAOPassDeps;
+
+    // Textures entirely managed by RenderGraph now
 
     constructor(deps: SSAOPassDeps) {
-        const size = [renderer.canvas.width, renderer.canvas.height];
+        this.deps = deps;
 
-        this.ssaoTexture = renderer.device.createTexture({
-            label: "ssao texture",
-            size, format: "r16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.ssaoTextureView = this.ssaoTexture.createView();
-
-        this.blurredTexture = renderer.device.createTexture({
-            label: "ssao blurred texture",
-            size, format: "r16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this._blurredTextureView = this.blurredTexture.createView();
-
-        // SSAO generation
+        // Layouts
         const ssaoBindGroupLayout = renderer.device.createBindGroupLayout({
             label: "ssao bgl",
             entries: [
@@ -53,30 +28,18 @@ export class SSAOPass {
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
             ]
         });
-        this.ssaoBindGroup = renderer.device.createBindGroup({
-            layout: ssaoBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: deps.cameraBuffer } },
-                { binding: 1, resource: deps.hizTextureView },
-                { binding: 2, resource: deps.gBufferNormalView },
-                { binding: 3, resource: { buffer: deps.ssaoUniformsBuffer } },
-            ]
-        });
+
         this.ssaoPipeline = renderer.device.createRenderPipeline({
             layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [ssaoBindGroupLayout] }),
             vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
             fragment: { module: renderer.device.createShaderModule({ code: shaders.ssaoFragSrc }), entryPoint: "main", targets: [{ format: "r16float" }] }
         });
 
-        // SSAO blur
         const blurBindGroupLayout = renderer.device.createBindGroupLayout({
             label: "ssao blur bgl",
             entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } }]
         });
-        this.blurBindGroup = renderer.device.createBindGroup({
-            layout: blurBindGroupLayout,
-            entries: [{ binding: 0, resource: this.ssaoTextureView }]
-        });
+
         this.blurPipeline = renderer.device.createRenderPipeline({
             layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [blurBindGroupLayout] }),
             vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
@@ -84,41 +47,64 @@ export class SSAOPass {
         });
     }
 
-    execute(encoder: GPUCommandEncoder, enabled: boolean = true) {
+    addToGraph(graph: RenderGraph, enabled: boolean, hizHandle: ResourceHandle, normalHandle: ResourceHandle): ResourceHandle {
+        const blurHandle = graph.createTexture("SSAO_Blur_Res", {
+            format: "r16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+        });
+
         if (!enabled) {
-            // Fast clear to white (no occlusion) so the shading passes don't read garbage old frames
-            const clearPass = encoder.beginRenderPass({
-                label: "SSAO disabled clear pass",
-                colorAttachments: [{
-                    view: this._blurredTextureView, clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-                }]
-            });
-            clearPass.end();
-            return;
+            graph.addRenderPass("SSAO Clear")
+                .addColorAttachment(blurHandle, { clearValue: [1, 1, 1, 1] })
+                .execute((clearPass, pass) => {
+                    // Empty execution, clear is handled by attachment loadOp
+                });
+            return blurHandle;
         }
 
-        // SSAO generation
-        const ssaoPass = encoder.beginRenderPass({
-            label: "SSAO pass",
-            colorAttachments: [{
-                view: this.ssaoTextureView, clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-            }]
+        const ssaoHandle = graph.createTexture("SSAO_Raw", {
+            format: "r16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
-        ssaoPass.setPipeline(this.ssaoPipeline);
-        ssaoPass.setBindGroup(0, this.ssaoBindGroup);
-        ssaoPass.draw(3);
-        ssaoPass.end();
 
-        // SSAO blur
-        const blurPass = encoder.beginRenderPass({
-            label: "SSAO blur pass",
-            colorAttachments: [{
-                view: this._blurredTextureView, clearValue: [1, 1, 1, 1], loadOp: "clear", storeOp: "store"
-            }]
-        });
-        blurPass.setPipeline(this.blurPipeline);
-        blurPass.setBindGroup(0, this.blurBindGroup);
-        blurPass.draw(3);
-        blurPass.end();
+        graph.addRenderPass("SSAO Generation")
+            .readTexture(hizHandle)
+            .readTexture(normalHandle)
+            .addColorAttachment(ssaoHandle, { clearValue: [1, 1, 1, 1] })
+            .execute((ssaoPass, pass) => {
+                ssaoPass.setPipeline(this.ssaoPipeline);
+                
+                const mainBG = renderer.device.createBindGroup({
+                    label: "ssao main bgl",
+                    layout: this.ssaoPipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: this.deps.cameraBuffer } },
+                        { binding: 1, resource: pass.getTextureView(hizHandle) },
+                        { binding: 2, resource: pass.getTextureView(normalHandle) },
+                        { binding: 3, resource: { buffer: this.deps.ssaoUniformsBuffer } },
+                    ]
+                });
+
+                ssaoPass.setBindGroup(0, mainBG);
+                ssaoPass.draw(3);
+            });
+
+        graph.addRenderPass("SSAO Blur")
+            .readTexture(ssaoHandle)
+            .addColorAttachment(blurHandle, { clearValue: [1, 1, 1, 1] })
+            .execute((blurPass, pass) => {
+                blurPass.setPipeline(this.blurPipeline);
+
+                let blurBindGroup = renderer.device.createBindGroup({
+                    label: "ssao blur bgl",
+                    layout: this.blurPipeline.getBindGroupLayout(0),
+                    entries: [{ binding: 0, resource: pass.getTextureView(ssaoHandle) }]
+                });
+
+                blurPass.setBindGroup(0, blurBindGroup);
+                blurPass.draw(3);
+            });
+
+        return blurHandle;
     }
 }

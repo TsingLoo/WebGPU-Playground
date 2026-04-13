@@ -7,6 +7,7 @@ import { initWebGPU, Renderer, device } from './renderer';
 
 import { ForwardPlusRenderer } from './renderers/forward_plus';
 import { ClusteredDeferredRenderer } from './renderers/clustered_deferred';
+import { WavefrontPathTracingRenderer } from './renderers/path_tracing_wavefront';
 
 // @ts-ignore
 import parseHdr from 'parse-hdr';
@@ -35,9 +36,28 @@ await initWebGPU();
 setupLoaders();
 
 let scene = new Scene();
-const gltfResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
-scene.root.addChild(gltfResult.rootEntity);
-await scene.mergeMaterialAndTextures(device, gltfResult.materialDataArray, gltfResult.materialCount, gltfResult.baseColorImages, gltfResult.baseColorImages.length);
+const urlParams = new URLSearchParams(window.location.search);
+const sceneParam = urlParams.get('scene') ?? 'sponza';
+
+// Always load Sponza as the base environment
+const sponzaResult = await loadGltf('./scenes/sponza/Sponza.gltf', scene.materialCount, scene.layerCount);
+scene.root.addChild(sponzaResult.rootEntity);
+await scene.mergeMaterialAndTextures(device, sponzaResult.materialDataArray, sponzaResult.materialCount, sponzaResult.baseColorImages, sponzaResult.normalMapImages, sponzaResult.mrImages, sponzaResult.emissiveImages, sponzaResult.baseColorImages.length);
+
+// If glass_sphere is requested, append it!
+if (sceneParam === 'glass_sphere') {
+    const sphereResult = await loadGltf('./scenes/glass_sphere/glass_sphere.gltf', scene.materialCount, scene.layerCount);
+    // Position the glass sphere in the middle of Sponza!
+    sphereResult.rootEntity.position = [0, 4, 0];
+    sphereResult.rootEntity.scale = [4, 4, 4];
+    scene.root.addChild(sphereResult.rootEntity);
+    await scene.mergeMaterialAndTextures(device, sphereResult.materialDataArray, sphereResult.materialCount, sphereResult.baseColorImages, sphereResult.normalMapImages, sphereResult.mrImages, sphereResult.emissiveImages, sphereResult.baseColorImages.length);
+} else if (sceneParam === 'helmet') {
+    const helmetResult = await loadGltf('./scenes/DamagedHelmet.glb', scene.materialCount, scene.layerCount);
+    scene.root.addChild(helmetResult.rootEntity);
+    await scene.mergeMaterialAndTextures(device, helmetResult.materialDataArray, helmetResult.materialCount, helmetResult.baseColorImages, helmetResult.normalMapImages, helmetResult.mrImages, helmetResult.emissiveImages, helmetResult.baseColorImages.length);
+}
+
 scene.bvhData = buildBVHFromScene(scene.root);
 
 const voxelResult = buildVoxelGrid(scene.root);
@@ -61,7 +81,8 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     // but the Schema will look them up dynamically when onUpdate is called.
     const globals = {
         get setRenderer() { return typeof setRenderer !== 'undefined' ? setRenderer : undefined; },
-        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; }
+        get renderModeController() { return typeof renderModeController !== 'undefined' ? renderModeController : undefined; },
+        get activeRenderer() { return typeof renderer !== 'undefined' ? renderer : undefined; }
     };
 
     const cameraEntity = new Entity("Main Camera");
@@ -70,33 +91,34 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     cameraEntity.addComponent(cameraComp);
     targetScene.root.addChild(cameraEntity);
 
+    // Sun directional light — owns its data directly.
+    // Stage reads from this component via scene.getDirectionalLight().
+    // NO applyComponentSchema here — that would replace instance props with stage-proxy
+    // getters, creating a circular dep since Stage reads from this component.
     const sunEntity = new Entity("Directional Light (Sun)");
     const sunComp = new DirectionalLightComponent();
-    sunComp.direction = stageObj.sunDirection;
-    sunComp.color = stageObj.sunColor;
-    applyComponentSchema(sunComp, 'DirectionalLightComponent', stageObj, globals);
     sunEntity.addComponent(sunComp);
 
     // VSM Shadow Component appended to Sun Entity
     const vsmComp = new VSMShadowComponent();
     applyComponentSchema(vsmComp, 'VSMShadowComponent', stageObj, globals);
-    // wire enabled to sunEnabled + trigger lighting sync
-    Object.defineProperty(vsmComp, 'enabled', { 
-        get: () => stageObj.sunEnabled, 
-        set: (v) => { 
-            stageObj.sunEnabled = v; 
+    // VSM enabled → DirectionalLightComponent.shadowEnabled via Stage proxy
+    Object.defineProperty(vsmComp, 'enabled', {
+        get: () => stageObj.vsmEnabled,
+        set: (v) => {
+            stageObj.vsmEnabled = v;
             stageObj.updateSunLight();
-        }, 
-        enumerable: true 
+        },
+        enumerable: true
     });
     Object.defineProperty(vsmComp, 'virtualSizeMax', { get: () => String(stageObj.vsm.virtualSize), set: () => {}, enumerable: true });
     Object.defineProperty(vsmComp, 'maxPhysPagesInfo', { get: () => String(stageObj.vsm.maxPhysPages), set: () => {}, enumerable: true });
     sunEntity.addComponent(vsmComp);
     targetScene.root.addChild(sunEntity);
 
+    // Volumetric fog — owns its data directly, same as DirectionalLight.
     const volEntity = new Entity("Global Volume (Fog)");
     const volComp = new VolumetricFogComponent();
-    applyComponentSchema(volComp, 'VolumetricFogComponent', stageObj, globals);
     volEntity.addComponent(volComp);
     targetScene.root.addChild(volEntity);
 
@@ -172,6 +194,9 @@ function addHelpersToScene(targetScene: Scene, targetCamera: Camera, stageObj: S
     applyComponentSchema(ssrComp, 'SSRComponent', stageObj, globals);
     ppEntity.addComponent(ssrComp);
     targetScene.root.addChild(ppEntity);
+
+    // Now that sun component exists, refresh the GPU buffer
+    stageObj.updateSunLight();
 }
 
 const stats = new Stats();
@@ -254,7 +279,11 @@ const avgStats = {
 const gui = new GUI();
 
 // =========== Render Mode (top-level) ===========
-const renderModes = { forwardPlus: 'forward+', clusteredDeferred: 'clustered deferred' };
+const renderModes = {
+    forwardPlus: 'forward+',
+    clusteredDeferred: 'clustered deferred',
+    pathTracing: 'path tracing'
+};
 let renderModeController = gui.add({ mode: renderModes.forwardPlus }, 'mode', renderModes);
 
 gui.add(avgStats, 'currentFPS').name('Current FPS').listen();
@@ -274,6 +303,7 @@ lights.updateLightSetUniformNumLights();
 // =========== Stage ===========
 const stage = new Stage(scene, lights, camera, stats, environment);
 addHelpersToScene(scene, camera, stage);
+stage.nrc.setSceneBounds(scene.bvhData.boundingBoxMin, scene.bvhData.boundingBoxMax);
 
 var renderer: Renderer | undefined;
 
@@ -287,8 +317,66 @@ function setRenderer(mode: string) {
         case renderModes.clusteredDeferred:
             renderer = new ClusteredDeferredRenderer(stage);
             break;
+        case renderModes.pathTracing:
+            renderer = new WavefrontPathTracingRenderer(stage);
+            // Wire up GUI controls to the WPT renderer
+            ptSampleCountController?.listen();
+            break;
     }
 }
+
+// =========== Path Tracing GUI ===========
+const ptFolder = gui.addFolder('Path Tracing');
+const ptConfig = { maxBounces: 4, clampRadiance: 10.0, pixelScale: 1.0, sampleCount: 0, reset: () => {} };
+
+ptFolder.add(ptConfig, 'maxBounces', 1, 8, 1).name('Max Bounces').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.maxBounces = v; r.resetAccumulation(); }
+});
+ptFolder.add(ptConfig, 'clampRadiance', 1.0, 50.0, 0.5).name('Clamp Radiance').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.clampRadiance = v; }
+});
+ptFolder.add(ptConfig, 'pixelScale', 0.25, 1.0, 0.25).name('Pixel Scale').onChange((v: number) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) { r.config.pixelScale = v; }
+});
+ptFolder.add(stage.nrc, 'enabled').name('Enable NRC').onChange(() => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'resetAccumulation' in r) { r.resetAccumulation(); ptConfig.sampleCount = 0; }
+});
+const ptSampleCountController = ptFolder.add(ptConfig, 'sampleCount').name('Samples').listen();
+ptFolder.add({ reset: () => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'resetAccumulation' in r) {
+        r.resetAccumulation();
+        ptConfig.sampleCount = 0;
+    }
+}}, 'reset').name('Reset Accumulation');
+
+// Spectral Rendering toggle (pbrt v4 style hero wavelength)
+ptFolder.add({ spectralEnabled: false }, 'spectralEnabled').name('Spectral Rendering').onChange((v: boolean) => {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'config' in r) {
+        r.config.spectralEnabled = v;
+        if ('resetAccumulation' in r) {
+            r.resetAccumulation();
+            ptConfig.sampleCount = 0;
+        }
+        console.log(`[WPT] Spectral rendering ${v ? 'ENABLED' : 'DISABLED'}`);
+    }
+});
+
+// Sync sampleCount display each animation frame
+function syncPTStats() {
+    const r = renderer as unknown as WavefrontPathTracingRenderer;
+    if (r && 'sampleCount' in r) {
+        ptConfig.sampleCount = r.sampleCount;
+    }
+    requestAnimationFrame(syncPTStats);
+}
+syncPTStats();
+
 
 renderModeController.onChange(setRenderer);
 
@@ -473,10 +561,10 @@ modelFileInput.addEventListener('change', async (event) => {
         const buffer = await file.arrayBuffer();
 
         const newScene = new Scene();
-        const result = await loadGltfBuffer(buffer, 0, 0); // brand new scene starts from offset 0
+        const result = await loadGltfBuffer(buffer, newScene.materialCount, newScene.layerCount);
         newScene.root.addChild(result.rootEntity);
         
-        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await newScene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.emissiveImages, result.baseColorImages.length);
         newScene.bvhData = buildBVHFromScene(newScene.root);
         
         const voxelResult = buildVoxelGrid(newScene.root);
@@ -487,6 +575,7 @@ modelFileInput.addEventListener('change', async (event) => {
         addHelpersToScene(newScene, camera, stage);
         stage.scene = newScene;
         sceneTreeUI.setScene(newScene);
+        stage.nrc.setSceneBounds(newScene.bvhData.boundingBoxMin, newScene.bvhData.boundingBoxMax);
 
         // Disable random point lights (designed for Sponza) to avoid color artifacts
         lights.numLights = 0;
@@ -536,7 +625,7 @@ appendModelFileInput.addEventListener('change', async (event) => {
         const result = await loadGltfBuffer(buffer, scene.materialCount, scene.layerCount);
         scene.root.addChild(result.rootEntity);
         
-        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.baseColorImages.length);
+        await scene.mergeMaterialAndTextures(device, result.materialDataArray, result.materialCount, result.baseColorImages, result.normalMapImages, result.mrImages, result.emissiveImages, result.baseColorImages.length);
         scene.bvhData = buildBVHFromScene(scene.root);
         
         const voxelResult = buildVoxelGrid(scene.root);
@@ -545,6 +634,7 @@ appendModelFileInput.addEventListener('change', async (event) => {
         
         scene.root.updateWorldTransform();
         sceneTreeUI.setScene(scene); // Refresh UI hierarchy
+        stage.nrc.setSceneBounds(scene.bvhData.boundingBoxMin, scene.bvhData.boundingBoxMax);
 
         // Re-init renderer to pick up the expanded global buffers and textures
         if (renderModeController) {

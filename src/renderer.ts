@@ -1,4 +1,5 @@
 import { Scene } from './engine/Scene';
+
 import { Lights } from './stage/lights';
 import { Camera } from './stage/camera';
 import { Stage } from './stage/stage';
@@ -30,21 +31,67 @@ export async function initWebGPU() {
 
     if (!navigator.gpu)
     {
-        let errorMessageElement = document.createElement("h1");
-        errorMessageElement.textContent = "This browser doesn't support WebGPU! Try using Google Chrome.";
-        errorMessageElement.style.paddingLeft = '0.4em';
+        let errorMessageElement = document.createElement("div");
+        errorMessageElement.style.padding = '1em';
+        let mainMessage = document.createElement("h1");
+        mainMessage.textContent = "This browser doesn't support WebGPU!";
+        errorMessageElement.appendChild(mainMessage);
+        
+        const isLinux = navigator.userAgent.toLowerCase().includes("linux");
+        const isChrome = navigator.userAgent.toLowerCase().includes("chrome");
+        if (isLinux && isChrome) {
+            let linuxMessage = document.createElement("p");
+            linuxMessage.innerHTML = "It looks like you are using Chrome on Linux. WebGPU is not enabled by default on Linux Chrome.<br>To enable it, please run Chrome with the following flags or enable them in <code>chrome://flags</code>:<br><br><code>--enable-unsafe-webgpu --enable-features=Vulkan</code>";
+            errorMessageElement.appendChild(linuxMessage);
+        } else {
+            let otherMessage = document.createElement("p");
+            otherMessage.textContent = "Try using a browser that supports WebGPU, like the latest Google Chrome on Windows/macOS.";
+            errorMessageElement.appendChild(otherMessage);
+        }
+
         document.body.innerHTML = '';
         document.body.appendChild(errorMessageElement);
         throw new Error("WebGPU not supported on this browser");
     }
 
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    let adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    if (!adapter) {
+        console.warn("Could not get high-performance adapter, trying default...");
+        adapter = await navigator.gpu.requestAdapter();
+    }
+    
     if (!adapter)
     {
+        let errorMessageElement = document.createElement("div");
+        errorMessageElement.style.padding = '1em';
+        let mainMessage = document.createElement("h1");
+        mainMessage.textContent = "WebGPU is enabled, but no appropriate GPUAdapter was found!";
+        errorMessageElement.appendChild(mainMessage);
+        
+        const isLinux = navigator.userAgent.toLowerCase().includes("linux");
+        const isChrome = navigator.userAgent.toLowerCase().includes("chrome");
+        
+        let detailsMessage = document.createElement("p");
+        if (isLinux && isChrome) {
+            detailsMessage.innerHTML = "On Linux, this usually means Chrome could not initialize the Vulkan backend.<br><br><b>Troubleshooting steps:</b><br>1. Check <code>chrome://gpu</code> to see if Vulkan or WebGPU backend initialization failed.<br>2. Ensure your graphics drivers and Vulkan (e.g., install <code>mesa-vulkan-drivers</code> or run <code>vulkaninfo</code>) are correctly installed.<br>3. Sometimes Chrome's sandbox blocks Vulkan access on Linux. For testing purposes only, you can try launching Chrome with <code>--disable-gpu-sandbox</code>.";
+        } else {
+            detailsMessage.innerHTML = "This may mean your system's GPU doesn't support WebGPU, or your graphics drivers need to be updated. Check <code>chrome://gpu</code> for more information.";
+        }
+        errorMessageElement.appendChild(detailsMessage);
+
+        document.body.innerHTML = '';
+        document.body.appendChild(errorMessageElement);
         throw new Error("no appropriate GPUAdapter found");
     }
 
-    device = await adapter.requestDevice();
+    const requiredLimits: Record<string, number> = {};
+    for (const key in adapter.limits) {
+        requiredLimits[key] = (adapter.limits as any)[key];
+    }
+
+    device = await adapter.requestDevice({
+        requiredLimits: requiredLimits
+    });
 
     context = canvas.getContext("webgpu")!;
     canvasFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -106,6 +153,16 @@ export async function initWebGPU() {
                 binding: 6,
                 visibility: GPUShaderStage.FRAGMENT,
                 sampler: {}
+            },
+            { // emissiveTex
+                binding: 7,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: {}
+            },
+            { // emissiveTexSampler
+                binding: 8,
+                visibility: GPUShaderStage.FRAGMENT,
+                sampler: {}
             }
         ]
     });
@@ -156,10 +213,19 @@ export abstract class Renderer {
         this.stats = stage.stats;
 
         this.frameRequestId = requestAnimationFrame((t) => this.onFrame(t));
+        window.addEventListener('resize', this.onResizeBound);
     }
+
+    private onResizeBound = () => {
+        aspectRatio = canvas.clientWidth / canvas.clientHeight;
+        this.camera.onResize(aspectRatio);
+    };
+
+
 
     stop(): void {
         cancelAnimationFrame(this.frameRequestId);
+        window.removeEventListener('resize', this.onResizeBound);
     }
 
     protected abstract draw(): void;

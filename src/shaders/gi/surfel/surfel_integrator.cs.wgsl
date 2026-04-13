@@ -76,6 +76,9 @@ fn integratorMain(@builtin(global_invocation_id) global_id: vec3u) {
         // Bump bias along normal to avoid self-intersection
         ray.origin = surfel.position + surfel.normal * 0.1;
         ray.direction = dir;
+        let safeDir = select(ray.direction, vec3f(1e-7), abs(ray.direction) < vec3f(1e-7));
+        ray.invDirection = 1.0 / safeDir;
+        ray.dirSign = vec3u(select(0u, 1u, safeDir.x < 0.0), select(0u, 1u, safeDir.y < 0.0), select(0u, 1u, safeDir.z < 0.0));
         
         // Trace against BVH
         let hit = bvhIntersectFirstHit(&bvhNodes, &bvhPositions, &bvhIndices, ray);

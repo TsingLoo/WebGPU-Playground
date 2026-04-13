@@ -9,6 +9,7 @@ export class HiZPass {
     
     public hizTexture!: GPUTexture;
     public hizTextureViews: GPUTextureView[] = [];
+    public hizFullTextureView!: GPUTextureView;
     public mipLevelCount: number = 1;
     public hizSize: [number, number] = [0, 0];
 
@@ -43,10 +44,9 @@ export class HiZPass {
     }
 
     resize(width: number, height: number) {
-        if (this.hizTexture) {
-            this.hizTexture.destroy();
-        }
+        // Let garbage collection handle old textures natively
         
+
         this.hizSize = [width, height];
         this.mipLevelCount = Math.floor(Math.log2(Math.max(width, height))) + 1;
 
@@ -57,6 +57,7 @@ export class HiZPass {
             mipLevelCount: this.mipLevelCount,
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
         });
+        this.hizFullTextureView = this.hizTexture.createView();
 
         this.hizTextureViews = [];
         for (let i = 0; i < this.mipLevelCount; i++) {

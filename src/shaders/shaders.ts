@@ -49,6 +49,7 @@ import nrcCommonRaw from './gi/nrc/nrc_common.wgsl?raw';
 import nrcScatterTrainingRaw from './gi/nrc/nrc_scatter_training.cs.wgsl?raw';
 import nrcTrainRaw from './gi/nrc/nrc_train.cs.wgsl?raw';
 import nrcInferenceRaw from './gi/nrc/nrc_inference.cs.wgsl?raw';
+import nrcPtCollectRaw from './gi/nrc/nrc_pt_collect.cs.wgsl?raw';
 
 // Surfel shaders
 import surfelCommonRaw from './gi/surfel/surfel_common.wgsl?raw';
@@ -57,6 +58,24 @@ import surfelLifecycleRaw from './gi/surfel/surfel_lifecycle.cs.wgsl?raw';
 import surfelGridRaw from './gi/surfel/surfel_grid.cs.wgsl?raw';
 import surfelIntegratorRaw from './gi/surfel/surfel_integrator.cs.wgsl?raw';
 import surfelResolveRaw from './gi/surfel/surfel_resolve.cs.wgsl?raw';
+
+// Path Tracing (Wavefront) shaders
+import ptCommonRaw from './gi/path_tracing/pt_common.wgsl?raw';
+import ptRayGenRaw from './gi/path_tracing/ray_gen.cs.wgsl?raw';
+import ptIntersectRaw from './gi/path_tracing/intersect.cs.wgsl?raw';
+import ptShadeRaw from './gi/path_tracing/shade.cs.wgsl?raw';
+import ptShadowTestRaw from './gi/path_tracing/shadow_test.cs.wgsl?raw';
+import ptMissRaw from './gi/path_tracing/miss.cs.wgsl?raw';
+import ptAccumulateRaw from './gi/path_tracing/accumulate.cs.wgsl?raw';
+import ptTonemapRaw from './gi/path_tracing/pt_tonemap.wgsl?raw';
+import spectralCommonRaw from './gi/path_tracing/spectral_common.wgsl?raw';
+
+// ReSTIR DI shaders
+import restirCommonRaw from './gi/path_tracing/restir_common.wgsl?raw';
+import restirInitialRaw from './gi/path_tracing/restir_initial.cs.wgsl?raw';
+import restirTemporalRaw from './gi/path_tracing/restir_temporal.cs.wgsl?raw';
+import restirSpatialRaw from './gi/path_tracing/restir_spatial.cs.wgsl?raw';
+import restirShadeRaw from './gi/path_tracing/restir_shade.cs.wgsl?raw';
 
 // Shadow shaders
 import shadowVertRaw from './shadows/shadow.vs.wgsl?raw';
@@ -306,3 +325,53 @@ export const surfelLifecycleSrc: string = processSurfelShaderRaw(surfelLifecycle
 export const surfelGridSrc: string = processSurfelShaderRaw(surfelGridRaw);
 export const surfelIntegratorSrc: string = processSurfelShaderRaw(surfelIntegratorRaw);
 export const surfelResolveSrc: string = processSurfelShaderRaw(surfelResolveRaw);
+
+// ===========================================================================
+// Path Tracing (Wavefront) shaders
+// ===========================================================================
+const ptCommonSrc: string = evalShaderRaw(ptCommonRaw);
+const spectralCommonSrc: string = evalShaderRaw(spectralCommonRaw);
+
+// Builds a complete PT compute shader: common + nrc_common + bvh + pt_common + spectral_common + shader_body
+function processPTShaderRaw(raw: string): string {
+    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(raw);
+}
+
+// RayGen needs camera + pt_common + spectral_common (no BVH)
+export const ptRayGenSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptRayGenRaw);
+
+// Intersection needs BVH
+export const ptIntersectSrc: string = processPTShaderRaw(ptIntersectRaw);
+
+// Shade needs pt_common (for material/RNG helpers) + sun light structs from common
+export const ptShadeSrc: string = processPTShaderRaw(ptShadeRaw);
+
+// Shadow test needs BVH
+export const ptShadowTestSrc: string = processPTShaderRaw(ptShadowTestRaw);
+
+// Miss needs pt_common + spectral_common (no BVH)
+export const ptMissSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptMissRaw);
+
+// Accumulate: no BVH, no RNG, needs spectral_common for conversion
+export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(ptAccumulateRaw);
+
+// Tonemap: standalone (vertex + fragment in one file, split by entry points)
+export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTonemapRaw);
+
+// NRC Collect Training requires full PT structs and NRC structs
+export const nrcPtCollectSrc: string = processPTShaderRaw(nrcPtCollectRaw);
+
+// ===========================================================================
+// ReSTIR DI shaders
+// ===========================================================================
+const restirCommonSrc: string = evalShaderRaw(restirCommonRaw);
+
+// Builds a complete ReSTIR compute shader: common + nrc_common + bvh + pt_common + restir_common + shader_body
+function processReSTIRShaderRaw(raw: string): string {
+    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + restirCommonSrc + evalShaderRaw(raw);
+}
+
+export const ptRestirInitialSrc: string = processReSTIRShaderRaw(restirInitialRaw);
+export const ptRestirTemporalSrc: string = processReSTIRShaderRaw(restirTemporalRaw);
+export const ptRestirSpatialSrc: string = processReSTIRShaderRaw(restirSpatialRaw);
+export const ptRestirShadeSrc: string = processReSTIRShaderRaw(restirShadeRaw);

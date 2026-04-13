@@ -3,6 +3,7 @@ import { Component } from './Component';
 import { BVHData } from '../stage/bvh_builder';
 import { Material, Primitive } from './GLTFLoader';
 import { MeshRenderer } from './components/MeshRenderer';
+import { DirectionalLightComponent, VolumetricFogComponent } from './components/LightComponent';
 
 type Constructor<T> = new (...args: any[]) => T;
 
@@ -16,6 +17,12 @@ export class Scene {
     public globalMaterialBuffer!: GPUBuffer;
     public baseColorTexArray!: GPUTexture;
     public baseColorTexArrayView!: GPUTextureView;
+    public normalMapTexArray!: GPUTexture;
+    public normalMapTexArrayView!: GPUTextureView;
+    public mrTexArray!: GPUTexture;
+    public mrTexArrayView!: GPUTextureView;
+    public emissiveTexArray!: GPUTexture;
+    public emissiveTexArrayView!: GPUTextureView;
 
     // CPU Data required for appending
     public materialDataArray: Float32Array = new Float32Array(0);
@@ -64,6 +71,28 @@ export class Scene {
             return Array.from(set) as T[];
         }
         return [];
+    }
+
+    /**
+     * Returns the first DirectionalLightComponent in the scene, or null.
+     */
+    public getDirectionalLight(): DirectionalLightComponent | null {
+        const set = this.componentsCache.get(DirectionalLightComponent);
+        if (set && set.size > 0) {
+            return set.values().next().value as DirectionalLightComponent;
+        }
+        return null;
+    }
+
+    /**
+     * Returns the first VolumetricFogComponent in the scene, or null.
+     */
+    public getVolumetricFog(): VolumetricFogComponent | null {
+        const set = this.componentsCache.get(VolumetricFogComponent);
+        if (set && set.size > 0) {
+            return set.values().next().value as VolumetricFogComponent;
+        }
+        return null;
     }
 
     /**
@@ -119,13 +148,23 @@ export class Scene {
         device: GPUDevice,
         newMaterialData: Float32Array,
         newCount: number,
-        newImages: GPUTexture[], // The temporarily uploaded individual resized images 
+        newBaseColorImages: GPUTexture[],
+        newNormalMapImages: GPUTexture[],
+        newMRImages: GPUTexture[],
+        newEmissiveImages: GPUTexture[],
         newLayerCount: number
     ) {
+        const FLOATS_PER_MAT = 20;
         // --- Merge Global Material Buffer ---
-        const combinedMaterials = new Float32Array(this.materialCount * 8 + newCount * 8);
-        combinedMaterials.set(this.materialDataArray);
-        combinedMaterials.set(newMaterialData, this.materialCount * 8);
+        const combinedMaterials = new Float32Array(this.materialCount * FLOATS_PER_MAT + newCount * FLOATS_PER_MAT);
+        
+        // Use Int32Array view to precisely copy bit patterns without triggering JS NaN-normalization
+        const combinedIntView = new Int32Array(combinedMaterials.buffer);
+        const oldIntView = new Int32Array(this.materialDataArray.buffer);
+        const newIntView = new Int32Array(newMaterialData.buffer);
+
+        combinedIntView.set(oldIntView);
+        combinedIntView.set(newIntView, this.materialCount * FLOATS_PER_MAT);
 
         this.materialDataArray = combinedMaterials;
         this.materialCount += newCount;
@@ -142,46 +181,52 @@ export class Scene {
         }
         this.globalMaterialBuffer = newGlobalMaterialBuffer;
 
-        // --- Merge BaseColor Texture Array ---
-        const TEX_ARRAY_SIZE = 256;
+        // --- Helper: Build/Merge a Texture Array ---
+        const TEX_ARRAY_SIZE = 1024;
         const totalLayers = this.layerCount + newLayerCount;
 
-        const newBaseColorTexArray = device.createTexture({
-            label: "BaseColor Texture Array (Merged)",
-            size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
-            format: 'rgba8unorm',
-            dimension: '2d',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
-        });
+        const mergeTexArray = (label: string, oldArray: GPUTexture | null, oldLayers: number, newImages: GPUTexture[], format: GPUTextureFormat = 'rgba8unorm'): GPUTexture => {
+            const tex = device.createTexture({
+                label, size: [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, totalLayers],
+                format: format, dimension: '2d',
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+            const enc = device.createCommandEncoder();
+            if (oldArray && oldLayers > 0) {
+                enc.copyTextureToTexture(
+                    { texture: oldArray, aspect: 'all' },
+                    { texture: tex, aspect: 'all' },
+                    [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, oldLayers]
+                );
+            }
+            for (let i = 0; i < newImages.length; i++) {
+                enc.copyTextureToTexture(
+                    { texture: newImages[i], aspect: 'all' },
+                    { texture: tex, origin: [0, 0, oldLayers + i] },
+                    [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1]
+                );
+            }
+            device.queue.submit([enc.finish()]);
+            if (oldArray) oldArray.destroy();
+            return tex;
+        };
 
-        const commandEncoder = device.createCommandEncoder();
+        // --- Merge BaseColor Texture Array ---
+        this.baseColorTexArray = mergeTexArray("BaseColor Array", this.baseColorTexArray, this.layerCount, newBaseColorImages);
+        this.baseColorTexArrayView = this.baseColorTexArray.createView({ dimension: '2d-array' });
 
-        // 1. Copy old layers if they exist
-        if (this.baseColorTexArray && this.layerCount > 0) {
-            commandEncoder.copyTextureToTexture(
-                { texture: this.baseColorTexArray, aspect: 'all' },
-                { texture: newBaseColorTexArray, aspect: 'all' },
-                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, this.layerCount]
-            );
-        }
+        // --- Merge Normal Map Texture Array (linear) ---
+        this.normalMapTexArray = mergeTexArray("NormalMap Array", this.normalMapTexArray, this.layerCount, newNormalMapImages);
+        this.normalMapTexArrayView = this.normalMapTexArray.createView({ dimension: '2d-array' });
 
-        // 2. Copy new images 
-        for (let i = 0; i < newImages.length; i++) {
-            commandEncoder.copyTextureToTexture(
-                { texture: newImages[i], aspect: 'all' },
-                { texture: newBaseColorTexArray, origin: [0, 0, this.layerCount + i] },
-                [TEX_ARRAY_SIZE, TEX_ARRAY_SIZE, 1]
-            );
-        }
+        // --- Merge MR Texture Array (linear) ---
+        this.mrTexArray = mergeTexArray("MR Array", this.mrTexArray, this.layerCount, newMRImages);
+        this.mrTexArrayView = this.mrTexArray.createView({ dimension: '2d-array' });
 
-        device.queue.submit([commandEncoder.finish()]);
+        // --- Merge Emissive Texture Array (sRGB usually, but we use linear like everything else) ---
+        this.emissiveTexArray = mergeTexArray("Emissive Array", this.emissiveTexArray, this.layerCount, newEmissiveImages);
+        this.emissiveTexArrayView = this.emissiveTexArray.createView({ dimension: '2d-array' });
 
-        if (this.baseColorTexArray) {
-            this.baseColorTexArray.destroy();
-        }
-
-        this.baseColorTexArray = newBaseColorTexArray;
-        this.baseColorTexArrayView = newBaseColorTexArray.createView({ dimension: '2d-array' });
         this.layerCount = totalLayers;
     }
 }

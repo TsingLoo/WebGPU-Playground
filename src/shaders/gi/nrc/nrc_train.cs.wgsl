@@ -14,6 +14,8 @@
 @group(0) @binding(2) var<storage, read> trainingSamples: array<f32>; // training data
 @group(0) @binding(3) var<storage, read_write> gradAccum: array<f32>;  // gradient accumulator (same size as weights)
 @group(0) @binding(4) var<storage, read_write> momentum: array<f32>;   // momentum buffer (same size as weights)
+@group(0) @binding(5) var<storage, read_write> sampleCounter: atomic<u32>;
+
 
 const WG_SIZE: u32 = 64u;
 
@@ -39,7 +41,8 @@ fn main(
     @builtin(local_invocation_id) lid: vec3u
 ) {
     let threadIdx = lid.x;
-    let numSamples = u32(nrc.params.y);
+    let actualSamples = atomicLoad(&sampleCounter);
+    let loopSamples = u32(nrc.params.y);
     let lr = nrc.params.x;
     let momentumDecay = nrc.params.z;
 
@@ -51,7 +54,7 @@ fn main(
     }
     workgroupBarrier();
 
-    for (var sampleIdx = 0u; sampleIdx < numSamples; sampleIdx++) {
+    for (var sampleIdx = 0u; sampleIdx < loopSamples; sampleIdx++) {
         let baseOffset = sampleIdx * NRC_SAMPLE_STRIDE;
 
     // ---- Step 1: Load sample into shared memory ----
@@ -115,8 +118,9 @@ fn main(
     if (threadIdx < NRC_OUTPUT_DIM) {
         let o = wg_out[threadIdx];
         let t = wg_target[threadIdx];
+        let isValid = f32(sampleIdx < actualSamples);
         // Gradient of MSE * sigmoid derivative: (o - t) * o * (1 - o)
-        wg_dout[threadIdx] = (o - t) * o * (1.0 - o);
+        wg_dout[threadIdx] = (o - t) * o * (1.0 - o) * isValid;
     }
     workgroupBarrier();
 
@@ -228,7 +232,7 @@ fn main(
     // Apply average gradient over the batch + momentum
     var uIdx = threadIdx;
     while (uIdx < NRC_TOTAL_PARAMS) {
-        let avgGrad = gradAccum[uIdx] / max(f32(numSamples), 1.0);
+        let avgGrad = gradAccum[uIdx] / max(f32(actualSamples), 1.0);
         
         // Clip gradient to prevent exploding updates
         let clippedGrad = clamp(avgGrad, -1.0, 1.0);

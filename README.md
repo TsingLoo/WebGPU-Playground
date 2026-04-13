@@ -1,4 +1,4 @@
-WebGPU Forward+ / Clustered Deferred Renderer
+WebGPU Render
 ==============================================
 
 ![](./img/chrome_Bm0daornYa.jpg)
@@ -24,6 +24,141 @@ WebGPU Forward+ / Clustered Deferred Renderer
 https://github.com/user-attachments/assets/7da29776-83ef-4660-9702-f51ed1dad99b
 
 # Features
+
+## Render Graph Architecture
+
+A custom Render Graph (Frame Graph) is implemented for automatic resource management, pass scheduling, and intelligent memory aliasing.
+
+- **Dependency Tracking**: Tracks resource reads and writes across rendering/compute passes to build a Directed Acyclic Graph (DAG) and calculate topological sorting.
+- **Resource Aliasing**: Allocates internal physical textures and buffers efficiently based on resource lifespans using interval scheduling, reducing peak memory load.
+- **Intelligent Ops**: Automatically infers WebGPU `clear` and `discard` states based on the first/last usage index of each resource, saving memory bandwidth.
+- **Caching**: Hashes pass topology to avoid recompilation costs for static frames.
+
+```mermaid
+graph TB
+    subgraph PublicAPI["Public API (Called per-frame)"]
+        A1[createTexture / importTexture]
+        A2[createBuffer / importBuffer]
+        A3[addRenderPass / addComputePass]
+        A6[execute encoder]
+    end
+
+    subgraph CompilePipeline["Compile Pipeline (Topology Hash Miss)"]
+        B1["(1) Topology Hash Check"]
+        B2["(2) Dependency Analysis"]
+        B3["(3) Root Node Recognition"]
+        B4["(4) BFS Reverse Traversal"]
+        B5["(5) Kahn Topological Sorting"]
+        B6["(6) Lifetime & Usage Aggregation"]
+        B7["(7) Memory Aliasing (Interval Scheduling)"]
+        B9["(8) Precompile aliasBinds"]
+        B10["(9) Infer Load/Store Operations"]
+    end
+
+    subgraph ExecutePipeline["Execution Pipeline (Per-frame)"]
+        C1[Traverse Active Passes in Order]
+        C2[Allocate Physical Resources]
+        C3[Bind Alias Handles to Root]
+        C4["Execute Passes (Render/Compute)"]
+        C5[Release Resources to Pool]
+        C6[LRU Pool Cleanup]
+    end
+
+    A6 --> B1
+    B1 -->|Cache Miss| B2
+    B2 --> B3 --> B4 --> B5 --> B6 --> B7 --> B9 --> B10
+    B1 -->|Cache Hit| C1
+    B10 --> C1
+    C1 --> C2 --> C3 --> C4 --> C5 --> C6
+```
+
+### Single Frame Execution Sequence
+
+This sequence highlights what happens dynamically per-frame, showing where the caching mechanism bridges logical pass declarations with physical GPU allocations and callback execution.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Renderer / Pipeline
+    participant RG as RenderGraph
+    participant PB as PassBuilder
+    participant CP as compile()
+    participant Pool as Physical Resource Pool
+    participant GPU as WebGPU Device
+
+    Note over Caller,GPU: ── Frame Start ──
+
+    Caller->>RG: createTexture() / createBuffer()
+    RG-->>Caller: Logical Handle
+
+    Caller->>RG: addRenderPass() / addComputePass()
+    RG->>PB: new Builder(passData)
+    Caller->>PB: .readTexture() / .writeBuffer() / .execute(fn)
+
+    Note over Caller,GPU: ── execute(encoder) ──
+
+    Caller->>RG: execute(commandEncoder)
+    
+    RG->>CP: compile()
+    Note right of CP: Topology Hash Check<br>Kahn Topological Sort<br>Alias Scheduling<br>Load/Store Inference
+    CP-->>RG: CompiledPlan (O(1) if Cached)
+
+    loop For each activePass (Topological Order)
+        RG->>Pool: Allocate from pool or create Physical Resource
+        Pool-->>RG: PhysicalTexture / PhysicalBuffer
+        RG->>RG: Bind Alias Handle -> Root Physical Resource
+
+        alt Render Pass
+            RG->>GPU: encoder.beginRenderPass()
+            RG->>Caller: executeFn(renderPassEnc, resolver)
+            Caller->>RG: resolver.getTextureView(handle)
+            RG-->>Caller: GPUTextureView
+            RG->>GPU: renderPassEnc.end()
+        else Compute Pass
+            RG->>GPU: encoder.beginComputePass()
+            RG->>Caller: executeFn(computePassEnc, resolver)
+            RG->>GPU: computePassEnc.end()
+        end
+
+        RG->>Pool: Return unused physical resources to pool (deallocations)
+    end
+
+    RG->>Pool: LRU Scan (destroy if framesIdle > 5)
+    RG->>RG: Reset passes and handles for next frame
+
+    Note over Caller,GPU: ── Frame End ──
+```
+
+### Resource Lifetime & Memory Aliasing
+
+To drastically reduce VRAM usage, physical resources from the pool are aliased dynamically. Logical resource handles that do not overlap in lifetime will automatically share the exact same physical WebGPU resource in sequential order, preventing unnecessary allocations pipeline-wide.
+
+```mermaid
+graph LR
+    subgraph Logical["Logical Layer (Declared per-frame)"]
+        L1["Handle = 1<br>GBuffer_albedo"]
+        L2["Handle = 2<br>GBuffer_normal"]
+        L3["Handle = 3<br>SSAO_Result"]
+    end
+
+    subgraph Physical["Physical Layer (Pooled across frames)"]
+        P1["PhysicalTexture A<br>rgba8unorm 1920x1080"]
+        P2["PhysicalTexture B<br>rgba8unorm 1920x1080"]
+    end
+
+    subgraph Timeline["Pass Execution Order & Aliasing Interval"]
+        T1["Pass 0: GBuffer<br>Writes H1, H2"]
+        T2["Pass 1: SSAO<br>Reads H1, H2<br>Writes H3"]
+        T3["Pass 2: Lighting<br>Reads H3, H1"]
+    end
+
+    L1 -->|"firstUsage=Pass0<br>Allocate P1"| P1
+    L2 -->|"firstUsage=Pass0<br>Allocate P2"| P2
+    L3 -->|"firstUsage=Pass1<br>H2 lifetime ended → Alias H3 to P2"| P2
+    
+    T1 --> T2 --> T3
+```
+
+---
 
 ## Rendering Pipelines
 
@@ -82,22 +217,33 @@ The skybox is rendered as a fullscreen pass with reverse depth (`less-equal`), s
 
 ## Probe-Based Global Illumination (DDGI-style)
 
-A probe-based diffuse GI system inspired by DDGI. The overall framework -- probe grid, irradiance/visibility octahedral atlases, hysteresis blending, Chebyshev visibility weighting -- follows the standard DDGI pipeline, but the probe ray tracing stage differs from the original significantly: since WebGPU does not currently expose hardware ray tracing, rays are traced against a **pre-voxelized 128x128x128 3D grid** of the scene using a fixed-step DDA ray march, rather than intersecting actual triangle geometry via RT cores. Hit shading also uses a **fixed 50% grey albedo proxy** instead of reading real material properties from the hit surface.
+A probe-based diffuse GI system inspired by DDGI. The overall framework -- probe grid, irradiance/visibility octahedral atlases, hysteresis blending, Chebyshev visibility weighting -- follows the standard DDGI pipeline. Since WebGPU does not currently expose hardware ray tracing, the probe trace stage utilizes a **software ray tracer**. Rays are traced directly against a **Bounding Volume Hierarchy (BVH)** built from the scene's triangle geometry, rather than using RT cores.
 
 The per-frame compute pipeline consists of:
 
-1. **Probe Trace (Voxel DDA)** -- Each probe fires rays through the voxel grid. On hit, the voxel's encoded normal is used for direct sun lighting (with VSM shadow lookup). Missed rays sample the environment cubemap.
+1. **Probe Trace (Software Ray Tracing)** -- Each probe fires rays through the scene's BVH. On intersection with geometry, the hit surface's normal is evaluated for direct sun lighting (with VSM shadow lookup). Missed rays sample the environment cubemap.
 2. **Irradiance Update** -- Ray radiance results are blended into the irradiance atlas using exponential hysteresis, with octahedral encoding per probe.
 3. **Visibility Update** -- Mean distance and squared distance are accumulated for Chebyshev-based visibility testing.
 4. **Ping-Pong Atlases** -- Double-buffered atlas textures prevent read-write hazards across frames.
 
 During shading, each fragment performs trilinear interpolation across the 8 surrounding probes, weighted by Chebyshev visibility to suppress light leaking.
 
-### Hybrid SSGI
+```mermaid
+graph TD
+    A[Probe Grid] --> B(Probe Trace Pass)
+    B -->|Software Ray Tracing| C[BVH Intersection]
+    C -->|Hit| D(Evaluate Direct Lighting & VSM)
+    C -->|Miss| E(Sample Skybox)
+    D --> F(Irradiance Update Pass)
+    E --> F
+    D --> G(Visibility Update Pass)
+    F -->|Octahedral Encode| H[(Irradiance Atlas)]
+    G -->|Chebyshev Moments| I[(Visibility Atlas)]
+    H --> J(Shading Pass)
+    I --> J
+    J -->|Trilinear Interpolate| K[Final Indirect Diffuse]
+```
 
-When enabled, the DDGI path also runs a lightweight screen-space GI pass. A few short rays per pixel are traced through the G-buffer using screen-space ray marching, and hits are shaded with the DDGI irradiance estimate. The final indirect diffuse is a blend of SSGI (for hit rays) and DDGI (for missed rays), which sharpens contact-scale color bleeding that probe grids alone tend to miss.
-
----
 
 ## Virtual Shadow Maps (VSM)
 
@@ -110,31 +256,43 @@ Shadows from the directional (sun) light use a clipmap-based Virtual Shadow Map 
 
 The shadow lookup in the fragment shader walks the page table to find the physical atlas tile for the current fragment's light-space position. The default configuration is a 4096x4096 physical atlas with 128-texel pages and 6 clipmap levels.
 
+```mermaid
+graph TD
+    A[Camera View] --> B(Mark Pass)
+    B -->|Project to Light Space| C[Determine Required Pages]
+    C --> D(Allocate Pass)
+    D -->|Assign Physical Slots| E[(Physical Texture Atlas)]
+    E --> F(Render Pass)
+    F -->|Rasterize Geometry| E
+    E --> G(Shading Pass)
+    G -->|Lookup Page Table| H[Final Shadow Mask]
+```
+
 ---
 
 ## Screen-Space Ambient Occlusion (SSAO)
 
 A screen-space AO pass samples the G-buffer depth and normals to estimate local occlusion. The raw AO result is blurred with a box filter to reduce noise, then multiplied into the ambient term of the final shading. Radius, bias, and power are adjustable at runtime.
 
+```mermaid
+graph TD
+    A[(G-Buffer Depth)] --> C(SSAO Pass)
+    B[(G-Buffer Normal)] --> C
+    C -->|Sample Hemisphere| D[Raw Ambient Occlusion]
+    D --> E(Blur Pass)
+    E -->|Box Filter| F[Smoothed AO]
+    F --> G(Lighting Composite)
+    G -->|Multiply Ambient Term| H[Final Shaded Fragment]
+```
+
 ---
 
-## Volumetric Lighting
 
-Sun-aligned volumetric fog is rendered in a half-resolution pass. For each pixel, a ray is marched from the camera toward the fragment position, sampling the VSM shadow atlas at each step to determine in-light vs. in-shadow status. The accumulated scattering is composited back to full resolution with additive blending. Intensity, height falloff, height scale, maximum distance, and march step count are all adjustable via the GUI.
+## Spectral Path Tracing & Dispersion
 
----
+A spectral path tracing mode is implemented using the hero-wavelength approach (inspired by pbrt v4).
 
-## Point Lights & Sun Light
-
-Up to 8000 dynamic point lights can be spawned and their count adjusted at runtime. The sun (directional) light supports adjustable direction, intensity, and can be toggled on/off independently.
-
----
-
-## Runtime Tools
-
-- **Benchmark mode** -- Steps through a configurable range of point light counts, measuring average FPS over an 8-second window at each step.
-- **HDRI upload** -- Load `.hdr` or `.exr` environment maps at runtime; the IBL cubemaps are automatically recomputed.
-- **Model upload** -- Drag-and-drop `.gltf` or `.glb` files to replace the scene geometry.
+![Spectral Rendering On](./img/chrome_WfIF9BLH1u.jpg)
 
 ---
 

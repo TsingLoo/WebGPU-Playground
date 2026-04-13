@@ -1,4 +1,5 @@
 import * as renderer from '../renderer';
+import { RenderGraph } from '../engine/RenderGraph';
 import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
 import { RadianceCascades } from '../stage/radiance_cascades';
@@ -13,21 +14,27 @@ import { ClusteringPass } from './passes/clustering_pass';
 import { HiZPass } from './passes/hiz_pass';
 import { SSRPass } from './passes/ssr_pass';
 
+export interface GBufferHandles {
+    albedo: import('../engine/RenderGraph').ResourceHandle;
+    normal: import('../engine/RenderGraph').ResourceHandle;
+    position: import('../engine/RenderGraph').ResourceHandle;
+    specular: import('../engine/RenderGraph').ResourceHandle;
+    depth: import('../engine/RenderGraph').ResourceHandle;
+    sceneColor: import('../engine/RenderGraph').ResourceHandle;
+    ssao: import('../engine/RenderGraph').ResourceHandle;
+    emissive: import('../engine/RenderGraph').ResourceHandle;
+}
+
 export abstract class BaseSceneRenderer extends renderer.Renderer {
-    depthTexture: GPUTexture;
-    depthTextureView: GPUTextureView;
+    // These views will be dynamically updated each frame by the RenderGraph
+    depthTextureView!: GPUTextureView;
+    sceneColorTextureView!: GPUTextureView;
 
-    sceneColorTexture: GPUTexture;
-    sceneColorTextureView: GPUTextureView;
-
-    gBufferAlbedoTexture: GPUTexture;
-    gBufferAlbedoTextureView: GPUTextureView;
-    gBufferNormalTexture: GPUTexture;
-    gBufferNormalTextureView: GPUTextureView;
-    gBufferPositionTexture: GPUTexture;
-    gBufferPositionTextureView: GPUTextureView;
-    gBufferSpecularTexture: GPUTexture;
-    gBufferSpecularTextureView: GPUTextureView;
+    gBufferAlbedoTextureView!: GPUTextureView;
+    gBufferNormalTextureView!: GPUTextureView;
+    gBufferPositionTextureView!: GPUTextureView;
+    gBufferSpecularTextureView!: GPUTextureView;
+    gBufferEmissiveTextureView!: GPUTextureView;
 
     tileOffsetsDeviceBuffer: GPUBuffer;
     globalLightIndicesDeviceBuffer: GPUBuffer;
@@ -59,10 +66,20 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
     protected stageEnv: import('../stage/environment').Environment;
     protected stage: import('../stage/stage').Stage;
 
+    protected finalBlitPipeline: GPURenderPipeline;
+    protected finalBlitSampler: GPUSampler;
+
+    protected sharedRenderGraph = new RenderGraph(); // Persist pool across frames
+    
+    protected requiresGBuffer(): boolean {
+        // Base renderer assumes GBuffer is needed by default (Deferred always needs it).
+        // Forward+ can override this to optionally skip it when post-processing is off.
+        return true; 
+    }
+
     constructor(stage: Stage) {
         super(stage);
 
-        const gBufSize = [renderer.canvas.width, renderer.canvas.height];
         this.stageEnv = stage.environment;
         this.stage = stage;
         this.radianceCascades = stage.radianceCascades;
@@ -80,51 +97,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         this.dummyStorageBuffer = renderer.device.createBuffer({
             size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-
-        // Depth buffer
-        this.depthTexture = renderer.device.createTexture({
-            size: gBufSize,
-            format: "depth24plus",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
-        });
-        this.depthTextureView = this.depthTexture.createView();
-
-        this.sceneColorTexture = renderer.device.createTexture({
-            label: "Scene Color Texture",
-            size: gBufSize,
-            format: "rgba16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
-        });
-        this.sceneColorTextureView = this.sceneColorTexture.createView();
-
-        // G-Buffer textures
-        this.gBufferAlbedoTexture = renderer.device.createTexture({
-            label: "G-Buffer Albedo Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferAlbedoTextureView = this.gBufferAlbedoTexture.createView();
-
-        this.gBufferNormalTexture = renderer.device.createTexture({
-            label: "G-Buffer Normal Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferNormalTextureView = this.gBufferNormalTexture.createView();
-
-        this.gBufferPositionTexture = renderer.device.createTexture({
-            label: "G-Buffer Position Texture",
-            size: gBufSize, format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferPositionTextureView = this.gBufferPositionTexture.createView();
-
-        this.gBufferSpecularTexture = renderer.device.createTexture({
-            label: "G-Buffer Specular Texture",
-            size: gBufSize, format: 'rgba8unorm',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.gBufferSpecularTextureView = this.gBufferSpecularTexture.createView();
 
         // Cluster buffers
         this.tileOffsetsDeviceBuffer = renderer.device.createBuffer({
@@ -183,23 +155,17 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
             globalLightIndicesBuffer: this.globalLightIndicesDeviceBuffer,
             clusterSetBuffer: this.clusterSetDeviceBuffer,
             zeroBuffer: this.zeroDeviceBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView()
+            hizTextureView: this.hizPass.hizFullTextureView // Wait, might need dynamic update later if HiZ uses RenderGraph
         });
 
         // Initialize pass modules
         this.ssaoPass = new SSAOPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView(),
-            gBufferNormalView: this.gBufferNormalTextureView,
             ssaoUniformsBuffer: this.stage.ssao.uniformsBuffer,
         });
 
         this.ssrPass = new SSRPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            hizTextureView: this.hizPass.hizTexture.createView(),
-            normalTextureView: this.gBufferNormalTextureView,
-            specularTextureView: this.gBufferSpecularTextureView,
-            depthTextureView: this.depthTextureView,
             ssrUniformsBuffer: this.stage.ssr.uniformsBuffer,
         });
 
@@ -211,7 +177,6 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
 
         this.volumetricPass = new VolumetricPass({
             cameraBuffer: this.camera.uniformsBuffer,
-            depthTextureView: this.depthTextureView,
             sunLightBuffer: this.stage.sunLightBuffer,
             vsm: this.vsm,
         });
@@ -222,187 +187,267 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
         });
 
         this.ddgiDebugPass = new DDGIDebugPass();
-    }
 
+        this.finalBlitSampler = renderer.device.createSampler({});
+        const blitBGL = renderer.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+            ]
+        });
+        this.finalBlitPipeline = renderer.device.createRenderPipeline({
+            label: "final blit pipeline",
+            layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [blitBGL] }),
+            vertex: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitVertSrc }), entryPoint: "main" },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.fullscreenBlitFragSrc }), entryPoint: "main", targets: [{ format: renderer.canvasFormat }] }
+        });
+    }
     // ==== Template Method Architecture ====
 
     override draw() {
         const encoder = renderer.device.createCommandEncoder();
         const canvasTextureView = renderer.context.getCurrentTexture().createView();
 
-        // 1. Update active sun light
-        this.stage.updateSunLight();
+        const graph = this.sharedRenderGraph;
+
+        // --- Render Graph Setup ---
+        const canvasHandle = graph.importTexture("Canvas", canvasTextureView);
+
+        const depthHandle = graph.createTexture("SceneDepth", {
+            format: "depth24plus",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
+        });
+
+        const sceneColorHandle = graph.createTexture("SceneColor", {
+            format: "rgba16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
+        });
+
+        const albedoHandle = graph.createTexture("GBufferAlbedo", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const normalHandle = graph.createTexture("GBufferNormal", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const positionHandle = graph.createTexture("GBufferPosition", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const specularHandle = graph.createTexture("GBufferSpecular", { format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const emissiveHandle = graph.createTexture("GBufferEmissive", { format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+
+        // 1. Stage Data Update Pass
+        graph.addGenericPass("Stage Updates")
+            .markRoot()
+            .execute((_, _pass) => {
+                this.stage.updateSunLight();
+            });
 
         // 2. Z-Prepass
-        const zPrepass = encoder.beginRenderPass({
-            label: "z prepass",
-            colorAttachments: [],
-            depthStencilAttachment: {
-                view: this.depthTextureView,
-                depthClearValue: 0.0,
-                depthLoadOp: "clear",
-                depthStoreOp: "store"
-            }
-        });
-        zPrepass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
+        graph.addRenderPass("Z-Prepass")
+            .setDepthStencilAttachment(depthHandle, { clearValue: 0.0 })
+            .execute((zPrepass, pass) => {
+                // Update our class property so legacy systems can read it
+                this.depthTextureView = pass.getTextureView(depthHandle);
 
-        // Opaque queue
-        let currentPipeline: GPURenderPipeline | null = null;
-        this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
-                           material => {
-                               const pipeline = this.getOrCreateZPrepassPipeline(material.type, true);
-                               if (currentPipeline !== pipeline) {
-                                   zPrepass.setPipeline(pipeline);
-                                   currentPipeline = pipeline;
-                               }
-                               zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-                           },
-                           primitive => {
-                               zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
-                               zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-                               zPrepass.drawIndexed(primitive.numIndices);
-                           }, true);
+                zPrepass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
 
-        // Alpha-cutout queue
-        currentPipeline = null;
-        this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
-                           material => {
-                               const pipeline = this.getOrCreateZPrepassPipeline(material.type, false);
-                               if (currentPipeline !== pipeline) {
-                                   zPrepass.setPipeline(pipeline);
-                                   currentPipeline = pipeline;
-                               }
-                               zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-                           },
-                           primitive => {
-                               zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
-                               zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-                               zPrepass.drawIndexed(primitive.numIndices);
-                           }, false);
-        zPrepass.end();
+                // Opaque queue
+                let currentPipeline: GPURenderPipeline | null = null;
+                this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
+                                   material => {
+                                       const pipeline = this.getOrCreateZPrepassPipeline(material.type, true);
+                                       if (currentPipeline !== pipeline) {
+                                           zPrepass.setPipeline(pipeline);
+                                           currentPipeline = pipeline;
+                                       }
+                                       zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
+                                   },
+                                   primitive => {
+                                       zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
+                                       zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                                       zPrepass.drawIndexed(primitive.numIndices);
+                                   }, true);
+
+                // Alpha-cutout queue
+                currentPipeline = null;
+                this.scene.iterate(mr => { zPrepass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
+                                   material => {
+                                       const pipeline = this.getOrCreateZPrepassPipeline(material.type, false);
+                                       if (currentPipeline !== pipeline) {
+                                           zPrepass.setPipeline(pipeline);
+                                           currentPipeline = pipeline;
+                                       }
+                                       zPrepass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
+                                   },
+                                   primitive => {
+                                       zPrepass.setVertexBuffer(0, primitive.vertexBuffer);
+                                       zPrepass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                                       zPrepass.drawIndexed(primitive.numIndices);
+                                   }, false);
+            });
 
         // 2.5 Hi-Z Generation
-        this.hizPass.execute(encoder, this.depthTextureView);
+        graph.addGenericPass("HiZ")
+            .markRoot()
+            .readTexture(depthHandle)
+            .execute((enc, _pass) => {
+                this.hizPass.execute(enc, this.depthTextureView);
+            });
+
+        const hizHandle = graph.importTexture("HiZ_Import", this.hizPass.hizFullTextureView);
 
         // 3. VSM Shadow Map Pass
-        this.stage.renderShadowMap(encoder, this.depthTextureView);
+        if (this.stage.vsmEnabled) {
+            graph.addGenericPass("Shadow Map")
+                .markRoot()
+                .readTexture(depthHandle)
+                .execute((enc, _pass) => {
+                    this.stage.renderShadowMap(enc, this.depthTextureView);
+                });
+        }
 
         // 4. G-Buffer Pass
-        const gBufferPass = encoder.beginRenderPass({
-            label: "G-buffer pass",
-            colorAttachments: [
-                { view: this.gBufferAlbedoTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferNormalTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferPositionTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-                { view: this.gBufferSpecularTextureView, loadOp: 'clear', clearValue: [0,0,0,0], storeOp: 'store' },
-            ],
-            depthStencilAttachment: { view: this.depthTextureView, depthReadOnly: true }
-        });
-        gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
+        graph.addRenderPass("G-Buffer")
+            .readTexture(depthHandle)
+            .addColorAttachment(albedoHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(normalHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(positionHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(specularHandle, { clearValue: [0,0,0,0] })
+            .addColorAttachment(emissiveHandle, { clearValue: [0,0,0,0] })
+            .setDepthStencilAttachment(depthHandle, { depthReadOnly: true })
+            .execute((gBufferPass, pass) => {
+                // Bridge views (legacy support)
+                this.gBufferAlbedoTextureView = pass.getTextureView(albedoHandle);
+                this.gBufferNormalTextureView = pass.getTextureView(normalHandle);
+                this.gBufferPositionTextureView = pass.getTextureView(positionHandle);
+                this.gBufferSpecularTextureView = pass.getTextureView(specularHandle);
+                this.gBufferEmissiveTextureView = pass.getTextureView(emissiveHandle);
+                gBufferPass.setBindGroup(shaders.constants.bindGroup_scene, this.geometryBindGroup);
 
-        // Opaque queue
-        let currentGeometryPipeline: GPURenderPipeline | null = null;
-        this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
-                           material => {
-                               const pipeline = this.getOrCreateGeometryPipeline(material.type, true);
-                               if (currentGeometryPipeline !== pipeline) {
-                                   gBufferPass.setPipeline(pipeline);
-                                   currentGeometryPipeline = pipeline;
-                               }
-                               gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-                           },
-                           primitive => {
-                               gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
-                               gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-                               gBufferPass.drawIndexed(primitive.numIndices);
-                           }, true);
+                // Opaque queue
+                let currentGeometryPipeline: GPURenderPipeline | null = null;
+                this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
+                                   material => {
+                                       const pipeline = this.getOrCreateGeometryPipeline(material.type, true);
+                                       if (currentGeometryPipeline !== pipeline) {
+                                           gBufferPass.setPipeline(pipeline);
+                                           currentGeometryPipeline = pipeline;
+                                       }
+                                       gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
+                                   },
+                                   primitive => {
+                                       gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
+                                       gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                                       gBufferPass.drawIndexed(primitive.numIndices);
+                                   }, true);
 
-        // Alpha-cutout queue
-        currentGeometryPipeline = null;
-        this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
-                           material => {
-                               const pipeline = this.getOrCreateGeometryPipeline(material.type, false);
-                               if (currentGeometryPipeline !== pipeline) {
-                                   gBufferPass.setPipeline(pipeline);
-                                   currentGeometryPipeline = pipeline;
-                               }
-                               gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
-                           },
-                           primitive => {
-                               gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
-                               gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
-                               gBufferPass.drawIndexed(primitive.numIndices);
-                           }, false);
-        gBufferPass.end();
+                // Alpha-cutout queue
+                currentGeometryPipeline = null;
+                this.scene.iterate(mr => { gBufferPass.setBindGroup(shaders.constants.bindGroup_model, mr.modelBindGroup!); },
+                                   material => {
+                                       const pipeline = this.getOrCreateGeometryPipeline(material.type, false);
+                                       if (currentGeometryPipeline !== pipeline) {
+                                           gBufferPass.setPipeline(pipeline);
+                                           currentGeometryPipeline = pipeline;
+                                       }
+                                       gBufferPass.setBindGroup(shaders.constants.bindGroup_material, material.materialBindGroup);
+                                   },
+                                   primitive => {
+                                       gBufferPass.setVertexBuffer(0, primitive.vertexBuffer);
+                                       gBufferPass.setIndexBuffer(primitive.indexBuffer, 'uint32');
+                                       gBufferPass.drawIndexed(primitive.numIndices);
+                                   }, false);
+            });
 
         // 5. GI Updates
-        if (this.stage.ddgi.enabled) {
-            this.stage.ddgi.update(
-                encoder, 
-                this.stage.scene.bvhData, 
-                this.stage.scene.globalMaterialBuffer,
-                this.stage.sunLightBuffer,
-                this.vsm.physicalAtlasView, 
-                this.vsm.vsmUniformBuffer,
-                this.stage.scene.bvhData.uvBuffer,
-                this.stage.scene.baseColorTexArrayView,
-            );
-        }
-        if (this.stage.radianceCascades.enabled) {
-            this.stage.radianceCascades.update(
-                encoder, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
-                this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
-            );
-            this.radianceCascades.updateUniforms();
-        }
+        graph.addGenericPass("GI Updates")
+            .markRoot()
+            .execute((enc, _pass) => {
+                if (this.stage.ddgi.enabled) {
+                    this.stage.ddgi.update(
+                        enc, 
+                        this.stage.scene.bvhData, 
+                        this.stage.scene.globalMaterialBuffer,
+                        this.stage.sunLightBuffer,
+                        this.vsm.physicalAtlasView, 
+                        this.vsm.vsmUniformBuffer,
+                        this.stage.scene.bvhData.uvBuffer,
+                        this.stage.scene.baseColorTexArrayView,
+                    );
+                }
+                if (this.stage.radianceCascades.enabled) {
+                    this.stage.radianceCascades.update(
+                        enc, this.stage.scene.voxelGridView, this.stage.sunLightBuffer,
+                        this.vsm.physicalAtlasView, this.vsm.vsmUniformBuffer
+                    );
+                    this.radianceCascades.updateUniforms();
+                }
+            });
 
         // 6. Light Clustering
-        this.clusteringPass.execute(encoder);
+        graph.addGenericPass("Light Clustering")
+            .markRoot()
+            .execute((enc, _pass) => {
+                this.clusteringPass.execute(enc);
+            });
 
-        // 7. Create shading bind group (sub-class hook)
-        this.createShadingBindGroup();
+        const ssaoHandle = this.ssaoPass.addToGraph(graph, this.stage.ssao.enabled, hizHandle, normalHandle);
 
-        // 8. SSAO
-        this.ssaoPass.execute(encoder, this.stage.ssao.enabled);
+        this.addToGraphShading(graph, { depth: depthHandle, albedo: albedoHandle, normal: normalHandle, position: positionHandle, specular: specularHandle, sceneColor: sceneColorHandle, ssao: ssaoHandle, emissive: emissiveHandle });
 
-        // 9. Sub-class shading pass
-        this.executeShadingPass(encoder, this.sceneColorTextureView);
+        graph.addRenderPass("Skybox & Debug")
+             .addColorAttachment(sceneColorHandle)
+             .setDepthStencilAttachment(depthHandle, { depthReadOnly: true })
+             .execute((renderPass, _pass) => {
+                 this.skyboxPass.execute(renderPass);
 
-        // 10. Skybox
-        this.skyboxPass.execute(encoder, this.sceneColorTextureView, this.depthTextureView);
+                 if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
+                     const isDDGI = this.stage.ddgi.enabled;
+                     const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
+                     const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
+                     const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
+                     this.debugPass.execute(renderPass, this.geometryBindGroup, minPos, maxPos, color);
+                 }
 
-        // 11. SSR & Composite
-        this.ssrPass.execute(encoder, this.stage.ssr.enabled, this.geometryBindGroup, this.sceneColorTextureView, this.gBufferAlbedoTextureView, canvasTextureView);
+                 if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
+                     this.ddgiDebugPass.execute(renderPass, {
+                         cameraBindGroupLayout: this.geometryBindGroupLayout,
+                         cameraBindGroup: this.geometryBindGroup,
+                         ddgi: this.stage.ddgi
+                     });
+                 }
+             });
+
+        if (this.stage.ssr.enabled) {
+            this.ssrPass.addToGraph(graph, this.stage.ssr.enabled, this.geometryBindGroup, sceneColorHandle, albedoHandle, normalHandle, specularHandle, depthHandle, hizHandle, canvasHandle);
+        } else {
+            // Graceful fallback for final output when post processing is omitted
+            graph.addRenderPass("Final Output Blit")
+                .readTexture(sceneColorHandle)
+                .addColorAttachment(canvasHandle, { clearValue: [0,0,0,1] })
+                .execute((blitPass, pass) => {
+                    blitPass.setPipeline(this.finalBlitPipeline);
+                    // Create a temporary bindgroup for the simple copy
+                    const blitBG = renderer.device.createBindGroup({
+                        layout: this.finalBlitPipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
+                            { binding: 1, resource: this.finalBlitSampler }
+                        ]
+                    });
+                    blitPass.setBindGroup(0, blitBG);
+                    blitPass.draw(3);
+                });
+        }
 
         // 12. Volumetric lighting
         if (this.stage.sunVolumetricEnabled) {
-            this.volumetricPass.execute(encoder, canvasTextureView);
+            this.volumetricPass.addToGraph(graph, canvasHandle, depthHandle);
         }
 
-        // 13. Debug bounds
-        if (this.stage.showGIBounds && (this.stage.ddgi.enabled || this.stage.radianceCascades.enabled)) {
-            const isDDGI = this.stage.ddgi.enabled;
-            const minPos = isDDGI ? this.stage.ddgi.gridMin : this.stage.radianceCascades.gridMin;
-            const maxPos = isDDGI ? this.stage.ddgi.gridMax : this.stage.radianceCascades.gridMax;
-            const color = isDDGI ? [0.0, 1.0, 0.0, 1.0] : [1.0, 0.5, 0.0, 1.0];
-            this.debugPass.execute(encoder, canvasTextureView, this.depthTextureView, this.geometryBindGroup, minPos, maxPos, color);
-        }
-
-        // 13. DDGI Probes
-        if (this.stage.ddgi.enabled && (this.stage.ddgi as any).showProbes) {
-            this.ddgiDebugPass.execute(encoder, canvasTextureView, this.depthTextureView, {
-                cameraBindGroupLayout: this.geometryBindGroupLayout,
-                cameraBindGroup: this.geometryBindGroup,
-                ddgi: this.stage.ddgi
-            });
-        }
+        // Compile and execute the RenderGraph!
+        graph.execute(encoder);
 
         renderer.device.queue.submit([encoder.finish()]);
     }
 
     // Sub-classes implement these
     protected abstract createShadingBindGroup(): void;
-    protected abstract executeShadingPass(encoder: GPUCommandEncoder, canvasTextureView: GPUTextureView): void;
+    protected abstract addToGraphShading(graph: RenderGraph, handles: GBufferHandles): void;
 
     // ==== Dynamic Pipeline Caches ====
 
@@ -428,6 +473,7 @@ export abstract class BaseSceneRenderer extends renderer.Renderer {
                     { format: 'rgba16float' }, // normal
                     { format: 'rgba16float' }, // position
                     { format: 'rgba8unorm' },  // specular
+                    { format: 'rgba16float' }, // emissive
                 ]
             },
             primitive: { topology: 'triangle-list', cullMode: 'none' }

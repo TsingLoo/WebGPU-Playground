@@ -1,46 +1,19 @@
 import * as renderer from '../../renderer';
 import * as shaders from '../../shaders/shaders';
+import { RenderGraph, ResourceHandle } from '../../engine/RenderGraph';
 
 export interface SSRPassDeps {
     cameraBuffer: GPUBuffer;
-    hizTextureView: GPUTextureView;
-    normalTextureView: GPUTextureView;
-    specularTextureView: GPUTextureView;
-    depthTextureView: GPUTextureView;
     ssrUniformsBuffer: GPUBuffer;
 }
 
 export class SSRPass {
-    private ssrHitTexture: GPUTexture;
-    private ssrHitTextureView: GPUTextureView;
-
     private ssrPipeline: GPURenderPipeline;
-    private ssrBindGroup: GPUBindGroup;
-
     private compositePipeline: GPURenderPipeline;
     private deps: SSRPassDeps;
 
-    private dummySsrTexture: GPUTexture;
-    private dummySsrTextureView: GPUTextureView;
-
     constructor(deps: SSRPassDeps) {
         this.deps = deps;
-        const size = [renderer.canvas.width, renderer.canvas.height];
-
-        this.ssrHitTexture = renderer.device.createTexture({
-            label: "ssr hit texture",
-            size, format: "rgba16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.ssrHitTextureView = this.ssrHitTexture.createView();
-
-        this.dummySsrTexture = renderer.device.createTexture({
-            label: "ssr dummy texture",
-            size: [1, 1], format: "rgba16float",
-            usage: GPUTextureUsage.TEXTURE_BINDING
-        });
-        this.dummySsrTextureView = this.dummySsrTexture.createView();
-
         // SSR generation
         const ssrBindGroupLayout = renderer.device.createBindGroupLayout({
             label: "ssr bgl",
@@ -50,16 +23,6 @@ export class SSRPass {
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-            ]
-        });
-        this.ssrBindGroup = renderer.device.createBindGroup({
-            layout: ssrBindGroupLayout,
-            entries: [
-                { binding: 0, resource: deps.hizTextureView },
-                { binding: 1, resource: deps.normalTextureView },
-                { binding: 2, resource: deps.specularTextureView },
-                { binding: 3, resource: deps.depthTextureView },
-                { binding: 4, resource: { buffer: deps.ssrUniformsBuffer } },
             ]
         });
 
@@ -98,51 +61,70 @@ export class SSRPass {
         });
     }
 
-    execute(encoder: GPUCommandEncoder, enabled: boolean, 
-            cameraBindGroup: GPUBindGroup, 
-            sceneColorView: GPUTextureView, 
-            albedoView: GPUTextureView,
-            canvasView: GPUTextureView) {
-        
-        if (enabled) {
-            // Run SSR Hit Tracing
-            const ssrPass = encoder.beginRenderPass({
-                label: "SSR pass",
-                colorAttachments: [{
-                    view: this.ssrHitTextureView, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"
-                }]
-            });
-            ssrPass.setPipeline(this.ssrPipeline);
-            ssrPass.setBindGroup(0, cameraBindGroup);
-            ssrPass.setBindGroup(1, this.ssrBindGroup);
-            ssrPass.draw(3);
-            ssrPass.end();
+    addToGraph(graph: RenderGraph, enabled: boolean, cameraBindGroup: GPUBindGroup, sceneColorHandle: ResourceHandle, albedoHandle: ResourceHandle, normalHandle: ResourceHandle, specularHandle: ResourceHandle, depthHandle: ResourceHandle, hizHandle: ResourceHandle, canvasHandle: ResourceHandle): void {
+        if (!enabled) {
+            return;
         }
 
-        // Run Composite Pass
-        const compositeBGL = this.compositePipeline.getBindGroupLayout(1);
-        const compositeBindGroup = renderer.device.createBindGroup({
-            layout: compositeBGL,
-            entries: [
-                { binding: 0, resource: sceneColorView },
-                { binding: 1, resource: enabled ? this.ssrHitTextureView : this.dummySsrTextureView },
-                { binding: 2, resource: albedoView },
-                { binding: 3, resource: this.deps.specularTextureView },
-                { binding: 4, resource: this.deps.normalTextureView },
-                { binding: 5, resource: this.deps.depthTextureView }
-            ]
+        const ssrHitHandle = graph.createTexture("SSR_Hit", {
+            format: "rgba16float",
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
         });
 
-        const compositePass = encoder.beginRenderPass({
-            label: "SSR composite pass",
-            colorAttachments: [{
-                view: canvasView, loadOp: "clear", clearValue: [0,0,0,1], storeOp: "store"
-            }]
-        });
-        compositePass.setPipeline(this.compositePipeline);
-        compositePass.setBindGroup(0, cameraBindGroup);
-        compositePass.setBindGroup(1, compositeBindGroup);
-        compositePass.draw(3);
-        compositePass.end();
+        graph.addRenderPass("SSR Generate")
+            .readTexture(sceneColorHandle)
+            .readTexture(depthHandle)
+            .readTexture(albedoHandle)
+            .readTexture(normalHandle)
+            .readTexture(specularHandle)
+            .readTexture(hizHandle)
+            .addColorAttachment(ssrHitHandle, { clearValue: [0, 0, 0, 0] })
+            .execute((ssrPass, pass) => {
+                const ssrBindGroup = renderer.device.createBindGroup({
+                    label: "ssr main bgl",
+                    layout: this.ssrPipeline.getBindGroupLayout(1),
+                    entries: [
+                        { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
+                        { binding: 1, resource: pass.getTextureView(depthHandle) },
+                        { binding: 2, resource: pass.getTextureView(normalHandle) },
+                        { binding: 3, resource: pass.getTextureView(specularHandle) },
+                        { binding: 4, resource: pass.getTextureView(hizHandle) },
+                        { binding: 5, resource: { buffer: this.deps.ssrUniformsBuffer } }
+                    ]
+                });
+
+                ssrPass.setPipeline(this.ssrPipeline);
+                ssrPass.setBindGroup(0, cameraBindGroup);
+                ssrPass.setBindGroup(1, ssrBindGroup);
+                ssrPass.draw(3);
+            });
+
+        graph.addRenderPass("SSR Composite")
+            .readTexture(sceneColorHandle)
+            .readTexture(ssrHitHandle)
+            .readTexture(albedoHandle)
+            .readTexture(specularHandle)
+            .readTexture(normalHandle)
+            .readTexture(depthHandle)
+            .addColorAttachment(canvasHandle, { clearValue: [0, 0, 0, 1] })
+            .execute((compositePass, pass) => {
+                const compositeBindGroup = renderer.device.createBindGroup({
+                    label: "ssr composite",
+                    layout: this.compositePipeline.getBindGroupLayout(1),
+                    entries: [
+                        { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
+                        { binding: 1, resource: pass.getTextureView(ssrHitHandle) },
+                        { binding: 2, resource: pass.getTextureView(albedoHandle) },
+                        { binding: 3, resource: pass.getTextureView(specularHandle) },
+                        { binding: 4, resource: pass.getTextureView(normalHandle) },
+                        { binding: 5, resource: pass.getTextureView(depthHandle) }
+                    ]
+                });
+
+                compositePass.setPipeline(this.compositePipeline);
+                compositePass.setBindGroup(0, cameraBindGroup);
+                compositePass.setBindGroup(1, compositeBindGroup);
+                compositePass.draw(3);
+            });
     }
 }
