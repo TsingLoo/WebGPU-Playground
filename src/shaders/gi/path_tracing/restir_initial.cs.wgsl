@@ -73,18 +73,30 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         var cand_pdf_s:  f32;
 
         // Decide: sun vs emissive triangle
-        // If no emissive triangles, always pick sun
-        let pick_sun = (restir.emissive_tri_count == 0u) || (rand(&rng) < 0.5);
+        // Determine availability of each light type upfront to avoid wasting candidate slots
+        let sun_enabled  = sun_light.color.a >= 0.5;
+        let has_emissive = restir.emissive_tri_count > 0u;
 
-        if (pick_sun || restir.emissive_tri_count == 0u) {
+        // Compute selection probability so we never waste a slot on a disabled source
+        // p_sun: probability of picking sun this candidate
+        var p_sun: f32;
+        if (sun_enabled && has_emissive) {
+            p_sun = 0.5;
+        } else if (sun_enabled) {
+            p_sun = 1.0;
+        } else if (has_emissive) {
+            p_sun = 0.0;
+        } else {
+            // No lights at all
+            continue;
+        }
+
+        let pick_sun = (p_sun >= 1.0) || (p_sun > 0.0 && rand(&rng) < p_sun);
+
+        if (pick_sun) {
             // ----- Sun candidate -----
             let sun_dir = normalize(sun_light.direction.xyz);
             let sun_intensity = sun_light.direction.w;
-
-            if (sun_light.color.a < 0.5) {
-                // Sun disabled, skip
-                continue;
-            }
 
             // Perturb for soft shadow disk
             let up_vec = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(sun_dir.x) > 0.9);
@@ -102,12 +114,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             cand_Le     = sun_light.color.rgb * sun_intensity;
             cand_dist   = 10000.0;
             cand_normal = -perturbed_dir;
-            // Source PDF for sun
-            if (restir.emissive_tri_count > 0u) {
-                cand_pdf_s = 0.5; // 50% chance to pick sun
-            } else {
-                cand_pdf_s = 1.0;
-            }
+            cand_pdf_s  = p_sun; // correct probability accounting for disabled sources
         } else {
             // ----- Emissive triangle candidate -----
             let tri_local_idx = randU32(&rng) % restir.emissive_tri_count;
@@ -147,7 +154,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             cand_dist = length(to_light);
 
             // Source PDF = P(pick emissive) * 1/(count * area)
-            cand_pdf_s = 0.5 / (f32(restir.emissive_tri_count) * max(tri_area, 1e-8));
+            cand_pdf_s = (1.0 - p_sun) / (f32(restir.emissive_tri_count) * max(tri_area, 1e-8));
             cand_type = 2u;
         }
 
