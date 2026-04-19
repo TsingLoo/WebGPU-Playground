@@ -131,6 +131,27 @@ fn main(
     var diffuseAmbient = vec3f(0.0);
     if (ddgiParams.ddgi_enabled.x > 0.5) {
         let ddgi_totalIrr = evaluateDDGI(pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
+        
+        let ddgiDebugMode = i32(ddgiParams.ddgi_enabled.y + 0.5);
+        if (ddgiDebugMode == 1 || ddgiDebugMode == 2) {
+            let scr_w = f32(clusterSet.screen_width);
+            let scr_h = f32(clusterSet.screen_height);
+            let uv = vec2f(f32(global_id.x), f32(global_id.y)) / vec2f(scr_w, scr_h);
+            if (uv.x > 0.6 && uv.y < 0.4) {
+                let atlasUV = vec2f((uv.x - 0.6) / 0.4, uv.y / 0.4);
+                if (ddgiDebugMode == 1) {
+                    let atlasColor = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, atlasUV, 0.0).rgb;
+                    textureStore(outputTex, fragcoordi, vec4f(atlasColor * 2.0, 1.0));
+                    return;
+                } else {
+                    let atlasDist = textureSampleLevel(ddgiVisibilityAtlas, ddgiSampler, atlasUV, 0.0).rg;
+                    let max_dist = max(ddgiParams.grid_spacing.x, max(ddgiParams.grid_spacing.y, ddgiParams.grid_spacing.z)) * 4.0;
+                    textureStore(outputTex, fragcoordi, vec4f(atlasDist.x/max_dist, atlasDist.y/(max_dist*max_dist), 0.0, 1.0));
+                    return;
+                }
+            }
+        }
+        
         diffuseAmbient = ddgi_totalIrr * albedo;
     } else if (rcParams.params.w > 0.5) {
         // Evaluate Radiance Cascades

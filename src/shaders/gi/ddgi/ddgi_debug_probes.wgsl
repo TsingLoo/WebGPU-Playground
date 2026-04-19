@@ -4,6 +4,7 @@
 @group(1) @binding(1) var<storage, read> probeData: array<vec4f>;
 @group(1) @binding(2) var irradianceAtlas: texture_2d<f32>;
 @group(1) @binding(3) var ddgiSampler: sampler;
+@group(1) @binding(4) var visibilityAtlas: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4f,
@@ -57,15 +58,27 @@ fn vs_main(@builtin(instance_index) inst_idx: u32, @builtin(vertex_index) v_idx:
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    let mode = i32(ddgi.ddgi_enabled.y + 0.5); // 1 = irradiance, 2 = visibility
     let octUV = octEncode(normalize(in.normal));
-    let texelCoord = ddgiIrradianceTexelCoord(i32(in.probe_index), octUV, ddgi);
     
-    // Gamma correction applied below when visualizing (since atlas is likely linear RGB)
-    let irradiance = textureSampleLevel(irradianceAtlas, ddgiSampler, texelCoord, 0.0).rgb;
-    
-    // Simple tonemapping for debug + Gamma
-    let color = irradiance / (irradiance + vec3f(1.0));
-    let srgbColor = pow(max(color, vec3f(0.0)), vec3f(1.0 / 2.2));
-    
-    return vec4f(srgbColor, 1.0);
+    if (mode == 2) {
+        let texelCoord = ddgiVisibilityTexelCoord(i32(in.probe_index), octUV, ddgi);
+        let dist = textureSampleLevel(visibilityAtlas, ddgiSampler, texelCoord, 0.0).rg;
+        
+        let max_dist = max(ddgi.grid_spacing.x, max(ddgi.grid_spacing.y, ddgi.grid_spacing.z)) * 4.0;
+        let visVal = dist.x / max_dist;
+        
+        // Show mean distance in red, and mean square distance in green
+        let color = vec3f(visVal, dist.y / (max_dist * max_dist), 0.0);
+        return vec4f(color, 1.0);
+    } else {
+        let texelCoord = ddgiIrradianceTexelCoord(i32(in.probe_index), octUV, ddgi);
+        let irradiance = textureSampleLevel(irradianceAtlas, ddgiSampler, texelCoord, 0.0).rgb;
+        
+        // Simple tonemapping for debug + Gamma
+        let color = irradiance / (irradiance + vec3f(1.0));
+        let srgbColor = pow(max(color, vec3f(0.0)), vec3f(1.0 / 2.2));
+        
+        return vec4f(srgbColor, 1.0);
+    }
 }
