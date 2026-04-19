@@ -71,19 +71,7 @@ struct PTMaterial {
     emissive_tex_layer: i32,
 };
 
-// ============================================================
-// NRC Training Struct
-// ============================================================
-struct NRCWavefrontTrainData {
-    features: array<f32, 15>,
-    _pad0: f32, // Padding to 64 bytes
-    throughput: vec3f,
-    _pad1: f32, // Padding to 80 bytes
-    primary_radiance: vec3f,
-    pixel_id: u32,
-    is_active: u32,
-    _pad2: vec3u, // Padding to 112 bytes? Wait, let's just make it cleanly aligned
-};
+
 
 // ============================================================
 // PT Uniforms (per-frame constants) — 48 bytes (12 × u32/f32)

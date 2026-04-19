@@ -455,15 +455,7 @@ struct RCUniforms {
     debug: vec4f,  // x = debug_mode (0=Off, 1=GI Only, 2=Atlas PIP)
 }
 
-// ============================
-// NRC (Neural Radiance Caching)
-// ============================
-struct NRCUniforms {
-    scene_min: vec4f,          // xyz = scene AABB min, w = enabled (0/1)
-    scene_max: vec4f,          // xyz = scene AABB max, w = debug_mode
-    params: vec4f,             // x = learning_rate, y = num_training_samples, z = momentum, w = frame_count
-    screen_dims: vec4f,        // x = width, y = height, z = sample_stride_x, w = sample_stride_y
-}
+
 
 // Octahedral encoding: map direction to [0,1]^2
 fn octEncode(n: vec3f) -> vec2f {

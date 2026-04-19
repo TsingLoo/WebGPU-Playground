@@ -176,14 +176,6 @@ fn evaluateRCProbes(
     return totalIrr;
 }
 
-fn evaluateNRC(
-    screenUV: vec2f,
-    nrcInferenceTex: texture_2d<f32>
-) -> vec3f {
-    let nrcTexSize = textureDimensions(nrcInferenceTex);
-    let nrcCoord = vec2i(i32(screenUV.x * f32(nrcTexSize.x)), i32(screenUV.y * f32(nrcTexSize.y)));
-    return textureLoad(nrcInferenceTex, nrcCoord, 0).rgb;
-}
 
 fn evaluateSurfel(
     screenUV: vec2f,

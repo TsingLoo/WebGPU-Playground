@@ -44,12 +44,7 @@ import ddgiDebugProbesRaw from './gi/ddgi/ddgi_debug_probes.wgsl?raw';
 import rcTraceRaw from './gi/radiance_cascades/rc_trace.cs.wgsl?raw';
 import rcBorderRaw from './gi/radiance_cascades/rc_border.cs.wgsl?raw';
 
-// NRC shaders
-import nrcCommonRaw from './gi/nrc/nrc_common.wgsl?raw';
-import nrcScatterTrainingRaw from './gi/nrc/nrc_scatter_training.cs.wgsl?raw';
-import nrcTrainRaw from './gi/nrc/nrc_train.cs.wgsl?raw';
-import nrcInferenceRaw from './gi/nrc/nrc_inference.cs.wgsl?raw';
-import nrcPtCollectRaw from './gi/nrc/nrc_pt_collect.cs.wgsl?raw';
+
 
 // Surfel shaders
 import surfelCommonRaw from './gi/surfel/surfel_common.wgsl?raw';
@@ -153,8 +148,6 @@ export const constants = {
     vsmNumClipmapLevels: 6,
     vsmPagesPerLevelAxis: 128,
 
-    // NRC
-    nrcMaxTrainingSamples: 4096,
 };
 
 // =================================
@@ -179,8 +172,7 @@ function evalShaderRaw(raw: string) {
     .replace(/\$\{ddgiIrradianceTexels\}/g, constants.ddgiIrradianceTexels.toString())
     .replace(/\$\{ddgiVisibilityTexels\}/g, constants.ddgiVisibilityTexels.toString())
 
-    .replace(/\$\{rcIrradianceTexels\}/g, constants.rcIrradianceTexels.toString())
-    .replace(/\$\{nrcMaxTrainingSamples\}/g, constants.nrcMaxTrainingSamples.toString());
+    .replace(/\$\{rcIrradianceTexels\}/g, constants.rcIrradianceTexels.toString());
 }
 
 const commonSrc: string = evalShaderRaw(commonRaw);
@@ -307,14 +299,7 @@ export const vsmClearSrc: string = processShaderRaw(vsmClearRaw);
 export const vsmMarkPagesSrc: string = processShaderRaw(vsmMarkPagesRaw);
 export const vsmAllocatePagesSrc: string = processShaderRaw(vsmAllocatePagesRaw);
 
-// NRC shaders (need common + nrc_common for structs/utilities)
-const nrcCommonSrc: string = evalShaderRaw(nrcCommonRaw);
-function processNrcShaderRaw(raw: string) {
-    return commonSrc + nrcCommonSrc + evalShaderRaw(raw);
-}
-export const nrcScatterTrainingSrc: string = processNrcShaderRaw(nrcScatterTrainingRaw);
-export const nrcTrainSrc: string = processNrcShaderRaw(nrcTrainRaw);
-export const nrcInferenceSrc: string = processNrcShaderRaw(nrcInferenceRaw);
+
 
 // Surfel shaders (need common + surfel_common + bvh for structs/utilities)
 const surfelCommonSrc: string = evalShaderRaw(surfelCommonRaw);
@@ -332,9 +317,8 @@ export const surfelResolveSrc: string = processSurfelShaderRaw(surfelResolveRaw)
 const ptCommonSrc: string = evalShaderRaw(ptCommonRaw);
 const spectralCommonSrc: string = evalShaderRaw(spectralCommonRaw);
 
-// Builds a complete PT compute shader: common + nrc_common + bvh + pt_common + spectral_common + shader_body
 function processPTShaderRaw(raw: string): string {
-    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(raw);
+    return commonSrc + bvhSrc + ptCommonSrc + spectralCommonSrc + evalShaderRaw(raw);
 }
 
 // RayGen needs camera + pt_common + spectral_common (no BVH)
@@ -358,17 +342,15 @@ export const ptAccumulateSrc: string = commonSrc + ptCommonSrc + spectralCommonS
 // Tonemap: standalone (vertex + fragment in one file, split by entry points)
 export const ptTonemapSrc: string = commonSrc + ptCommonSrc + evalShaderRaw(ptTonemapRaw);
 
-// NRC Collect Training requires full PT structs and NRC structs
-export const nrcPtCollectSrc: string = processPTShaderRaw(nrcPtCollectRaw);
+
 
 // ===========================================================================
 // ReSTIR DI shaders
 // ===========================================================================
 const restirCommonSrc: string = evalShaderRaw(restirCommonRaw);
 
-// Builds a complete ReSTIR compute shader: common + nrc_common + bvh + pt_common + restir_common + shader_body
 function processReSTIRShaderRaw(raw: string): string {
-    return commonSrc + nrcCommonSrc + bvhSrc + ptCommonSrc + restirCommonSrc + evalShaderRaw(raw);
+    return commonSrc + bvhSrc + ptCommonSrc + restirCommonSrc + evalShaderRaw(raw);
 }
 
 export const ptRestirInitialSrc: string = processReSTIRShaderRaw(restirInitialRaw);

@@ -27,7 +27,7 @@ import * as shaders from '../shaders/shaders';
 import { Stage } from '../stage/stage';
 import { Renderer } from '../renderer';
 import { pipelineCache } from '../engine/PipelineCache';
-import { NRC } from '../stage/nrc';
+
 import { RenderGraph, ResourceHandle } from '../engine/RenderGraph';
 
 // ============================================================
@@ -74,7 +74,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
     // ------------ Persistent GPU Buffers ------------
     private sampleSumBuffer!: GPUBuffer;  // Persistent sum across all samples
     private ptUniformBuffer!: GPUBuffer;  // PTUniforms (48 bytes)
-    private ptNRCTrainDataBuffer!: GPUBuffer; // Array of NRCWavefrontTrainData
+
 
     // ------------ Spectral GPU Buffers ------------
     private spectralWavelengthBuffer!: GPUBuffer;  // per-pixel vec4f of wavelengths (nm)
@@ -99,7 +99,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private shadowTestPipeline!: GPUComputePipeline;
     private missPipeline!: GPUComputePipeline;
     private accumulatePipeline!: GPUComputePipeline;
-    private nrcCollectPipeline!: GPUComputePipeline;
+
     private tonemapPipeline!: GPURenderPipeline;
 
     // ReSTIR Pipelines
@@ -112,12 +112,12 @@ export class WavefrontPathTracingRenderer extends Renderer {
     private rayGenLayout!: GPUBindGroupLayout;
     private intersectLayout!: GPUBindGroupLayout;
     private shadeLayout!: GPUBindGroupLayout;
-    private shadeNRCLayout!: GPUBindGroupLayout;
+
     private shadeSpectralLayout!: GPUBindGroupLayout;  // @group(2) for spectral buffers
     private shadowTestLayout!: GPUBindGroupLayout;
     private missLayout!: GPUBindGroupLayout;
     private accumulateLayout!: GPUBindGroupLayout;
-    private nrcCollectLayout!: GPUBindGroupLayout;
+
     private tonemapLayout!: GPUBindGroupLayout;
 
     // ReSTIR Layouts
@@ -186,12 +186,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         });
         console.log('[WPT] Spectral buffers created');
 
-        // ptNRCTrainDataBuffer: array of NRCWavefrontTrainData (96 bytes each)
-        this.ptNRCTrainDataBuffer = dev.createBuffer({
-            label: 'PT NRC Train Data',
-            size: NRC.MAX_TRAINING_SAMPLES * 96,
-            usage: GPUBufferUsage.STORAGE,
-        });
+
 
         // ============================================================
         // ReSTIR Buffers
@@ -289,15 +284,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
-        this.shadeNRCLayout = dev.createBindGroupLayout({
-            label: 'PT Shade NRC Layout',
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },   // NRCUniforms
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // weights
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // sampleCounter
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },   // ptNRCTrainData
-            ]
-        });
+
 
         this.shadeSpectralLayout = dev.createBindGroupLayout({
             label: 'PT Shade Spectral Layout',
@@ -352,16 +339,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
             ]
         });
 
-        this.nrcCollectLayout = dev.createBindGroupLayout({
-            label: 'PT NRC Collect Layout',
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },  // NRCUniforms
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // ptNRCTrainData
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // accum_buffer
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // sampleCounter
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },  // trainingSamples
-            ]
-        });
+
 
         this.tonemapLayout = dev.createBindGroupLayout({
             label: 'PT Tonemap Layout',
@@ -473,7 +451,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         console.log('[WPT] RayGen pipeline created');
         this.intersectPipeline  = mkCompute('WPT Intersect',  shaders.ptIntersectSrc,  this.intersectLayout);
         console.log('[WPT] Intersect pipeline created');
-        this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeNRCLayout, this.shadeSpectralLayout]);
+        this.shadePipeline      = mkComputeEx('WPT Shade',    shaders.ptShadeSrc,      [this.shadeLayout, this.shadeSpectralLayout]);
         console.log('[WPT] Shade pipeline created');
         this.shadowTestPipeline = mkCompute('WPT ShadowTest', shaders.ptShadowTestSrc, this.shadowTestLayout);
         console.log('[WPT] ShadowTest pipeline created');
@@ -481,8 +459,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         console.log('[WPT] Miss pipeline created');
         this.accumulatePipeline = mkCompute('WPT Accumulate', shaders.ptAccumulateSrc, this.accumulateLayout);
         console.log('[WPT] Accumulate pipeline created');
-        this.nrcCollectPipeline = mkCompute('WPT NRC Collect', shaders.nrcPtCollectSrc, this.nrcCollectLayout);
-        console.log('[WPT] NRC Collect pipeline created');
+
 
         // ---- ReSTIR Pipelines ----
         console.log('[ReSTIR] Creating compute pipelines...');
@@ -617,7 +594,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
         const ptUniformHandle = graph.importBuffer("PTUniforms", this.ptUniformBuffer);
         const restirUniformHandle = graph.importBuffer("ReSTIRUniforms", this.restirUniformBuffer);
         const sampleSumHandle = graph.importBuffer("SampleSumBuffer", this.sampleSumBuffer);
-        const ptNRCTrainDataHandle = graph.importBuffer("PTNRCTrainData", this.ptNRCTrainDataBuffer);
+
 
         // ---- Spectral Buffers ----
         const specWavelengthHandle = graph.importBuffer("SpectralWavelengths", this.spectralWavelengthBuffer);
@@ -649,19 +626,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 }
             });
 
-        // Initialize NRC states
-        if (this.stage.nrc.enabled) {
-            graph.addGenericPass('Reset NRC Counters')
-                .markRoot()
-                .execute((enc, _pass) => {
-                    this.stage.nrc.updateUniforms(); // ensures params are ready
-                    enc.copyBufferToBuffer(
-                        this.stage.nrc.sampleCounterZeroBuffer, 0,
-                        this.stage.nrc.sampleCounterBuffer, 0,
-                        4
-                    );
-                });
-        }
+
 
         // ---- Pass 0: Primary Ray Generation ----
         graph.addComputePass('WPT RayGen')
@@ -757,18 +722,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                     computePass.setPipeline(this.shadePipeline);
                     computePass.setBindGroup(0, bg);
 
-                    const nrcBg = dev.createBindGroup({
-                        layout: this.shadeNRCLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
-                            { binding: 1, resource: { buffer: this.stage.nrc.weightsBuffer } },
-                            { binding: 2, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
-                            { binding: 3, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } },
-                        ]
-                    });
-                    computePass.setBindGroup(1, nrcBg);
-
-                    // Spectral bind group (@group(2))
+                    // Spectral bind group (@group(1))
                     const spectralBg = dev.createBindGroup({
                         layout: this.shadeSpectralLayout,
                         entries: [
@@ -778,7 +732,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                             { binding: 3, resource: { buffer: pass.getBuffer(specAccumHandle) } },
                         ]
                     });
-                    computePass.setBindGroup(2, spectralBg);
+                    computePass.setBindGroup(1, spectralBg);
 
                     computePass.dispatchWorkgroups(r1D, 1, 1);
                 });
@@ -1007,37 +961,7 @@ export class WavefrontPathTracingRenderer extends Renderer {
                 });
         }
 
-        // ---- Pass: NRC Collect & Train (If enabled) ----
-        if (this.stage.nrc.enabled) {
-            graph.addComputePass('WPT NRC Collect')
-                .readBuffer(ptNRCTrainDataHandle)
-                .readBuffer(accumHandle)
-                // Using writeBuffer for trainingSamples as well, even if we don't have it explicitly bound
-                // because nrc manages itself
-                .execute((computePass, pass) => {
-                    const bg = dev.createBindGroup({
-                        layout: this.nrcCollectLayout,
-                        entries: [
-                            { binding: 0, resource: { buffer: this.stage.nrc.nrcUniformBuffer } },
-                            { binding: 1, resource: { buffer: pass.getBuffer(ptNRCTrainDataHandle) } },
-                            { binding: 2, resource: { buffer: pass.getBuffer(accumHandle) } },
-                            { binding: 3, resource: { buffer: this.stage.nrc.sampleCounterBuffer } },
-                            { binding: 4, resource: { buffer: this.stage.nrc.trainingSamplesBuffer } },
-                        ]
-                    });
-                    computePass.setPipeline(this.nrcCollectPipeline);
-                    computePass.setBindGroup(0, bg);
-                    // Dispatch 64 threads, max 4096 samples = 64 workgroups
-                    computePass.dispatchWorkgroups(Math.ceil(NRC.MAX_TRAINING_SAMPLES / 64), 1, 1);
-                });
 
-            // Run MLP update!
-            graph.addGenericPass('NRC Train')
-                .markRoot()
-                .execute((enc, _pass) => {
-                    this.stage.nrc.trainOnly(enc);
-                });
-        }
 
         // ---- Pass: Accumulate (add frame to persistent sum) ----
         graph.addComputePass('WPT Accumulate')

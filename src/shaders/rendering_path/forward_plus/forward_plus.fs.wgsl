@@ -22,9 +22,7 @@
 @group(${bindGroup_scene}) @binding(11) var vsmShadowSampler: sampler_comparison;
 @group(${bindGroup_scene}) @binding(12) var<storage, read> vsmPageTable: array<u32>;
 @group(${bindGroup_scene}) @binding(13) var<uniform> vsmUniforms: VSMUniforms;
-// NRC bindings
-@group(${bindGroup_scene}) @binding(14) var nrcInferenceTex: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(15) var<uniform> nrcParams: NRCUniforms;
+
 @group(${bindGroup_scene}) @binding(16) var gBufferPosition: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(17) var gBufferNormal: texture_2d<f32>;
 @group(${bindGroup_scene}) @binding(18) var gBufferAlbedo: texture_2d<f32>;
@@ -108,14 +106,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         }
 
         diffuseAmbient = rc_totalIrr * albedo;
-    } else if (nrcParams.scene_min.w > 0.5) {
-        // NRC mode: sample the neural radiance cache inference texture
-        let screenUV = in.fragcoord.xy / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
-        let nrcIrradiance = evaluateNRC(screenUV, nrcInferenceTex);
-        // NRC provides cached irradiance; apply albedo modulation
-        let nrcBounce = nrcIrradiance * albedo;
-        let iblFloor2 = ibl.iblIrradiance * albedo * 0.15;
-        diffuseAmbient = max(nrcBounce, iblFloor2);
+
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
         let screenUV = in.fragcoord.xy / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
@@ -133,31 +124,11 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         let surfelBounce = surfelIrradiance * albedo * surfelParams.y; // apply intensity
         diffuseAmbient = surfelBounce; // Completely replace IBL ambient to clearly see the real GI
     } else {
-        // No DDGI/NRC/Surfel: use IBL irradiance with moderate scaling
+        // No DDGI/Surfel: use IBL irradiance with moderate scaling
         diffuseAmbient = ibl.iblIrradiance * albedo * 1.0;
     }
 
-    // ---- NRC Debug Visualization ----
-    if (nrcParams.scene_min.w > 0.5) {
-        let nrcDebugMode = i32(nrcParams.scene_max.w);
-        if (nrcDebugMode == 1) {
-            // Mode 1: Raw Inference (amplified for visibility)
-            let screenUV = in.fragcoord.xy / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
-            let nrcTexSize = textureDimensions(nrcInferenceTex);
-            let nrcCoord = vec2i(i32(screenUV.x * f32(nrcTexSize.x)), i32(screenUV.y * f32(nrcTexSize.y)));
-            let nrcIrradiance = textureLoad(nrcInferenceTex, nrcCoord, 0).rgb;
-            return vec4f(nrcIrradiance * 3.0, 1.0);
-        }
-        if (nrcDebugMode == 2) {
-            // Mode 2: HDR Mapped
-            let screenUV = in.fragcoord.xy / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
-            let nrcTexSize = textureDimensions(nrcInferenceTex);
-            let nrcCoord = vec2i(i32(screenUV.x * f32(nrcTexSize.x)), i32(screenUV.y * f32(nrcTexSize.y)));
-            let nrcIrradiance = textureLoad(nrcInferenceTex, nrcCoord, 0).rgb;
-            let mapped = nrcIrradiance / (nrcIrradiance + vec3f(1.0));
-            return vec4f(pow(mapped, vec3f(1.0/2.2)), 1.0);
-        }
-    }
+
 
     // Composite and tone map (shared)
     let isGIActive = ddgiParams.ddgi_enabled.x > 0.5 || rcParams.params.w > 0.5;

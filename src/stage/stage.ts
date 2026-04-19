@@ -8,7 +8,7 @@ import { Scene } from "../engine/Scene";
 import { VSM } from "./vsm";
 import { SSAO } from "./ssao";
 import { SSR } from "./ssr";
-import { NRC } from "./nrc";
+
 import { DirectionalLightComponent, VolumetricFogComponent } from "../engine/components/LightComponent";
 
 export class Stage {
@@ -27,7 +27,7 @@ export class Stage {
     vsm: VSM;
     ssao: SSAO;
     ssr: SSR;
-    nrc: NRC;
+
 
     // Sun light GPU buffer — packed from the scene's DirectionalLightComponent each frame
     sunLightBuffer: GPUBuffer;
@@ -45,7 +45,7 @@ export class Stage {
         this.vsm = new VSM(this.camera);
         this.ssao = new SSAO();
         this.ssr = new SSR();
-        this.nrc = new NRC(this.camera, this.environment);
+
 
         // SunLight struct: direction(16) + color(16) + light_vp(64) + shadow_params(16) + volumetric_params(16) = 128 bytes
         this.sunLightBuffer = device.createBuffer({

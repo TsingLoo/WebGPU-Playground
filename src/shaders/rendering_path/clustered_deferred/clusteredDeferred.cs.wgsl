@@ -27,9 +27,7 @@
 @group(${bindGroup_scene}) @binding(16) var vsmPhysAtlas: texture_depth_2d;
 @group(${bindGroup_scene}) @binding(17) var<storage, read> vsmPageTable: array<u32>;
 @group(${bindGroup_scene}) @binding(18) var<uniform> vsmUniforms: VSMUniforms;
-// NRC bindings
-@group(${bindGroup_scene}) @binding(19) var nrcInferenceTex: texture_2d<f32>;
-@group(${bindGroup_scene}) @binding(20) var<uniform> nrcParams: NRCUniforms;
+
 
 // Surfel GI binding
 @group(${bindGroup_scene}) @binding(21) var surfelIrradianceTex: texture_2d<f32>;
@@ -153,13 +151,7 @@ fn main(
         }
 
         diffuseAmbient = max(rc_totalIrr * albedo, ibl.iblIrradiance * albedo * 0.25);
-    } else if (nrcParams.scene_min.w > 0.5) {
-        // NRC mode
-        let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(nrcParams.screen_dims.x, nrcParams.screen_dims.y);
-        let nrcIrradiance = evaluateNRC(screenUV, nrcInferenceTex);
-        let nrcBounce = nrcIrradiance * albedo;
-        let iblFloor2 = ibl.iblIrradiance * albedo * 0.15;
-        diffuseAmbient = max(nrcBounce, iblFloor2);
+
     } else if (surfelParams.x > 0.5) {
         // Surfel GI mode
         let screenUV = vec2f(f32(global_id.x) + 0.5, f32(global_id.y) + 0.5) / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
@@ -168,7 +160,7 @@ fn main(
         let iblFloor3 = ibl.iblIrradiance * albedo * 0.05;
         diffuseAmbient = max(surfelBounce, iblFloor3);
     } else {
-        // No DDGI/NRC/Surfel: use IBL irradiance with moderate scaling
+        // No DDGI/Surfel: use IBL irradiance with moderate scaling
         diffuseAmbient = ibl.iblIrradiance * albedo * 1.0;
     }
 
