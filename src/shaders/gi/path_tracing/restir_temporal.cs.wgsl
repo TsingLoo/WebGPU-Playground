@@ -189,8 +189,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // ================================================================
     if (Z == 0u || final_p_hat < 1e-10) {
         current_reservoir.W = 0.0;
+        current_reservoir.M = 0u;
     } else {
         current_reservoir.W = current_reservoir.w_sum / (f32(Z) * final_p_hat);
+        current_reservoir.M = Z;
     }
 
     reservoir_buffer[pixel_id] = current_reservoir;

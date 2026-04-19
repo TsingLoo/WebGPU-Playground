@@ -197,8 +197,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var final_res = combined;
     if (Z == 0u || p_hat_center < 1e-10) {
         final_res.W = 0.0;
+        final_res.M = 0u;
     } else {
         final_res.W = final_res.w_sum / (f32(Z) * p_hat_center);
+        final_res.M = Z;
     }
 
     reservoir_out[pixel_id] = final_res;
