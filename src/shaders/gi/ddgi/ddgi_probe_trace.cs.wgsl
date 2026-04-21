@@ -4,7 +4,7 @@
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(0) @binding(1) var<uniform> ddgi: DDGIUniforms;
 @group(0) @binding(2) var<uniform> randomRotation: mat4x4f;
-@group(0) @binding(3) var<storage, read> bvhNodes: array<BVHNode>;
+@group(0) @binding(3) var<storage, read> bvhNodes: array<BVH4Node>;
 @group(0) @binding(4) var<storage, read> bvhPositions: array<vec4f>;
 @group(0) @binding(5) var<storage, read> bvhIndices: array<vec4u>;
 

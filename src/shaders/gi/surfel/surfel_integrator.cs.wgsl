@@ -4,7 +4,7 @@
 @group(0) @binding(2) var<storage, read_write> surfels: array<Surfel>;
 
 // BVH bindings
-@group(1) @binding(0) var<storage, read> bvhNodes: array<BVHNode>;
+@group(1) @binding(0) var<storage, read> bvhNodes: array<BVH4Node>;
 @group(1) @binding(1) var<storage, read> bvhPositions: array<vec4f>;
 @group(1) @binding(2) var<storage, read> bvhIndices: array<vec4u>;
 

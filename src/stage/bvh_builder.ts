@@ -219,7 +219,95 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
         wgpuIndices[i*4 + 3] = matId; // Pass matId implicitly here!
     }
     
-    // 4. Create WebGPU Buffers
+    // 4. Convert Binary BVH to BVH4
+    function convertBVH2toBVH4(bvh2Buffer: ArrayBuffer): Float32Array {
+        const bvh2F32 = new Float32Array(bvh2Buffer);
+        const bvh2U32 = new Uint32Array(bvh2Buffer);
+        
+        const bvh4Nodes: Float32Array[] = [];
+        
+        function gatherChildren(node2Index: number, level: number): number[] {
+            const isLeaf = (bvh2U32[node2Index * 8 + 7] & 0xffff0000) !== 0;
+            if (isLeaf || level === 0) {
+                return [node2Index];
+            }
+            const leftIndex = node2Index + 1;
+            const rightIndex = node2Index + bvh2U32[node2Index * 8 + 6];
+            
+            const leftChildren = gatherChildren(leftIndex, level - 1);
+            const rightChildren = gatherChildren(rightIndex, level - 1);
+            
+            return [...leftChildren, ...rightChildren];
+        }
+        
+        function createBVH4Node(node2Index: number): number {
+            const children2 = gatherChildren(node2Index, 2);
+            
+            const bvh4NodeIndex = bvh4Nodes.length;
+            bvh4Nodes.push(new Float32Array(32)); // placeholder
+            
+            const minX = new Float32Array(4).fill(Infinity);
+            const minY = new Float32Array(4).fill(Infinity);
+            const minZ = new Float32Array(4).fill(Infinity);
+            const maxX = new Float32Array(4).fill(-Infinity);
+            const maxY = new Float32Array(4).fill(-Infinity);
+            const maxZ = new Float32Array(4).fill(-Infinity);
+            const data0 = new Uint32Array(4).fill(0);
+            const data1 = new Uint32Array(4).fill(0xFFFFFFFF);
+            
+            for (let i = 0; i < children2.length; i++) {
+                const child2Index = children2[i];
+                
+                minX[i] = bvh2F32[child2Index * 8 + 0];
+                minY[i] = bvh2F32[child2Index * 8 + 1];
+                minZ[i] = bvh2F32[child2Index * 8 + 2];
+                maxX[i] = bvh2F32[child2Index * 8 + 3];
+                maxY[i] = bvh2F32[child2Index * 8 + 4];
+                maxZ[i] = bvh2F32[child2Index * 8 + 5];
+                
+                const isLeaf = (bvh2U32[child2Index * 8 + 7] & 0xffff0000) !== 0;
+                if (isLeaf) {
+                    data0[i] = bvh2U32[child2Index * 8 + 6]; // offset
+                    data1[i] = bvh2U32[child2Index * 8 + 7] & 0x0000ffff; // count
+                } else {
+                    const child4Index = createBVH4Node(child2Index);
+                    data0[i] = child4Index;
+                    data1[i] = 0; // 0 means internal
+                }
+            }
+            
+            const nodeF32 = new Float32Array(32);
+            const nodeU32 = new Uint32Array(nodeF32.buffer);
+            
+            for (let i = 0; i < 4; i++) {
+                nodeF32[0 + i] = minX[i];
+                nodeF32[4 + i] = minY[i];
+                nodeF32[8 + i] = minZ[i];
+                nodeF32[12 + i] = maxX[i];
+                nodeF32[16 + i] = maxY[i];
+                nodeF32[20 + i] = maxZ[i];
+                nodeU32[24 + i] = data0[i];
+                nodeU32[28 + i] = data1[i];
+            }
+            
+            bvh4Nodes[bvh4NodeIndex] = nodeF32;
+            return bvh4NodeIndex;
+        }
+        
+        createBVH4Node(0);
+        
+        const finalBuffer = new Float32Array(bvh4Nodes.length * 32);
+        for (let i = 0; i < bvh4Nodes.length; i++) {
+            finalBuffer.set(bvh4Nodes[i], i * 32);
+        }
+        
+        return finalBuffer;
+    }
+
+    const bvh4Buffer = convertBVH2toBVH4(bvhNodeBufferArray);
+    console.log(`[BVH4] Compressed from ${bvhNodeBufferArray.byteLength / 32} to ${bvh4Buffer.length / 32} nodes`);
+
+    // 5. Create WebGPU Buffers
     const createAndUpload = (label: string, data: ArrayBuffer): GPUBuffer => {
         const buf = device.createBuffer({
             label, size: data.byteLength,
@@ -233,7 +321,7 @@ export function buildBVHFromScene(sceneRoot: Entity): BVHData {
     const boundingBox = bvh.getBoundingBox(new Box3());
     bvhData.boundingBoxMin = [boundingBox.min.x, boundingBox.min.y, boundingBox.min.z];
     bvhData.boundingBoxMax = [boundingBox.max.x, boundingBox.max.y, boundingBox.max.z];
-    bvhData.nodeBuffer     = createAndUpload("BVH Node Buffer", bvhNodeBufferArray);
+    bvhData.nodeBuffer     = createAndUpload("BVH Node Buffer", bvh4Buffer.buffer as ArrayBuffer);
     bvhData.positionBuffer = createAndUpload("BVH Position Buffer", wgpuPositions.buffer);
     bvhData.uvBuffer       = createAndUpload("BVH UV Buffer", wgpuUVs.buffer);
     bvhData.normalBuffer   = createAndUpload("BVH Normal Buffer", wgpuNormals.buffer);

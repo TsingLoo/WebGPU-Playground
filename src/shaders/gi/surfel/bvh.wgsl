@@ -1,5 +1,5 @@
 // bvh.wgsl
-// WGSL implementation of three-mesh-bvh traversal
+// WGSL implementation of Quadtree BVH (BVH4) traversal
 
 const BVH_STACK_DEPTH = 24u;
 const INFINITY = 1e20;
@@ -14,44 +14,57 @@ struct Ray {
     dirSign: vec3u,
 };
 
-struct BVHBoundingBox {
-    min: array<f32, 3>,
-    max: array<f32, 3>,
-}
-
-struct BVHNode {
-    bounds: BVHBoundingBox,
-    rightChildOrTriangleOffset: u32,
-    splitAxisOrTriangleCount: u32,
+// 128-byte BVH4 Node (8 x vec4f)
+struct BVH4Node {
+    minX: vec4f, // 4 children's Min X
+    minY: vec4f, // 4 children's Min Y
+    minZ: vec4f, // 4 children's Min Z
+    maxX: vec4f, // 4 children's Max X
+    maxY: vec4f, // 4 children's Max Y
+    maxZ: vec4f, // 4 children's Max Z
+    data0: vec4u, // children indices or triangle offsets
+    data1: vec4u, // triangle counts (0 means internal node, 0xFFFFFFFF means empty)
 };
 
 struct IntersectionResult {
     didHit: bool,
-    indices: vec4u, // xyz = vertex indices, w = matId (Customized for our packing!)
+    indices: vec4u, // xyz = vertex indices, w = matId
     normal: vec3f,
     barycoord: vec3f,
     side: f32,
     dist: f32,
 };
 
-fn intersectsBounds(ray: Ray, bounds: BVHBoundingBox, dist: ptr<function, f32>) -> bool {
-    let boundsMin = vec3f(bounds.min[0], bounds.min[1], bounds.min[2]);
-    let boundsMax = vec3f(bounds.max[0], bounds.max[1], bounds.max[2]);
-
+// Returns distances to 4 bounds. Distances are INFINITY if missed.
+fn intersectsBounds4(ray: Ray, node: BVH4Node) -> vec4f {
     let invDir = ray.invDirection;
     let negOriginInvDir = -ray.origin * invDir;
     
-    let tMinPlane = fma(boundsMin, invDir, negOriginInvDir);
-    let tMaxPlane = fma(boundsMax, invDir, negOriginInvDir);
-
-    let tMinHit = vec3f(min(tMinPlane.x, tMaxPlane.x), min(tMinPlane.y, tMaxPlane.y), min(tMinPlane.z, tMaxPlane.z));
-    let tMaxHit = vec3f(max(tMinPlane.x, tMaxPlane.x), max(tMinPlane.y, tMaxPlane.y), max(tMinPlane.z, tMaxPlane.z));
-
-    let t0 = max(max(tMinHit.x, tMinHit.y), tMinHit.z);
-    let t1 = min(min(tMaxHit.x, tMaxHit.y), tMaxHit.z);
-
-    *dist = max(t0, 0.0);
-    return t1 >= *dist;
+    let tMinPlaneX = node.minX * invDir.x + vec4f(negOriginInvDir.x);
+    let tMaxPlaneX = node.maxX * invDir.x + vec4f(negOriginInvDir.x);
+    
+    let tMinPlaneY = node.minY * invDir.y + vec4f(negOriginInvDir.y);
+    let tMaxPlaneY = node.maxY * invDir.y + vec4f(negOriginInvDir.y);
+    
+    let tMinPlaneZ = node.minZ * invDir.z + vec4f(negOriginInvDir.z);
+    let tMaxPlaneZ = node.maxZ * invDir.z + vec4f(negOriginInvDir.z);
+    
+    let tMinHitX = min(tMinPlaneX, tMaxPlaneX);
+    let tMaxHitX = max(tMinPlaneX, tMaxPlaneX);
+    
+    let tMinHitY = min(tMinPlaneY, tMaxPlaneY);
+    let tMaxHitY = max(tMinPlaneY, tMaxPlaneY);
+    
+    let tMinHitZ = min(tMinPlaneZ, tMaxPlaneZ);
+    let tMaxHitZ = max(tMinPlaneZ, tMaxPlaneZ);
+    
+    let t0 = max(max(tMinHitX, tMinHitY), tMinHitZ);
+    let t1 = min(min(tMaxHitX, tMaxHitY), tMaxHitZ);
+    
+    let hitDist = max(t0, vec4f(0.0));
+    let validHit = (t1 >= hitDist);
+    
+    return select(vec4f(INFINITY), hitDist, validHit);
 }
 
 fn intersectsTriangle(ray: Ray, a: vec3f, b: vec3f, c: vec3f) -> IntersectionResult {
@@ -82,7 +95,6 @@ fn intersectsTriangle(ray: Ray, a: vec3f, b: vec3f, c: vec3f) -> IntersectionRes
     result.barycoord = vec3f(w, u, v);
     result.dist = t;
     result.side = sign(det);
-    // Notice: we compute geometric normal, which might not be normalized exactly but close enough or we normalize it:
     result.normal = result.side * normalize(n);
 
     return result;
@@ -97,33 +109,11 @@ fn intersectTriangles(
     closestResult.didHit = false;
     closestResult.dist = INFINITY;
 
-    if (0u < count) {
-        let indices = bvh_index[offset + 0u];
-        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
-        if (triResult.didHit && triResult.dist < closestResult.dist) {
-            closestResult = triResult;
-            closestResult.indices = vec4u(indices.xyz, indices.w);
-        }
-    }
-    if (1u < count) {
-        let indices = bvh_index[offset + 1u];
-        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
-        if (triResult.didHit && triResult.dist < closestResult.dist) {
-            closestResult = triResult;
-            closestResult.indices = vec4u(indices.xyz, indices.w);
-        }
-    }
-    if (2u < count) {
-        let indices = bvh_index[offset + 2u];
-        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
-        if (triResult.didHit && triResult.dist < closestResult.dist) {
-            closestResult = triResult;
-            closestResult.indices = vec4u(indices.xyz, indices.w);
-        }
-    }
-    if (3u < count) {
-        let indices = bvh_index[offset + 3u];
-        var triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
+    // Up to 4 triangles are tested per leaf loop usually, but count could be any number.
+    // In three-mesh-bvh maxLeafSize is configurable, here we loop through all in the leaf.
+    for (var i = 0u; i < count; i++) {
+        let indices = bvh_index[offset + i];
+        let triResult = intersectsTriangle(ray, bvh_position[indices.x].xyz, bvh_position[indices.y].xyz, bvh_position[indices.z].xyz);
         if (triResult.didHit && triResult.dist < closestResult.dist) {
             closestResult = triResult;
             closestResult.indices = vec4u(indices.xyz, indices.w);
@@ -135,7 +125,7 @@ fn intersectTriangles(
 var<private> bvh_stack: array<u32, BVH_STACK_DEPTH>;
 
 fn bvhIntersectFirstHit(
-    bvh: ptr<storage, array<BVHNode>, read>,
+    bvh: ptr<storage, array<BVH4Node>, read>,
     bvh_position: ptr<storage, array<vec4f>, read>,
     bvh_index: ptr<storage, array<vec4u>, read>,
     ray: Ray
@@ -153,48 +143,49 @@ fn bvhIntersectFirstHit(
         let currNodeIndex = bvh_stack[pointer];
         pointer = pointer - 1;
 
-        var boundsHitDistance: f32 = 0.0;
-        let bounds = bvh[currNodeIndex].bounds;
+        let node = bvh[currNodeIndex];
+        let hitDists = intersectsBounds4(ray, node);
 
-        if (!intersectsBounds(ray, bounds, &boundsHitDistance) || boundsHitDistance > bestHit.dist) {
-            continue;
-        }
+        var d_arr = array<f32, 4>(hitDists.x, hitDists.y, hitDists.z, hitDists.w);
+        var idx_arr = array<u32, 4>(0u, 1u, 2u, 3u);
 
-        let boundsInfox = bvh[currNodeIndex].splitAxisOrTriangleCount;
-        let boundsInfoy = bvh[currNodeIndex].rightChildOrTriangleOffset;
-        let isLeaf = (boundsInfox & 0xffff0000u) != 0u;
+        // Sorting network for 4 elements (descending order).
+        // Smaller distances are moved to the right.
+        if (d_arr[0] < d_arr[1]) { let tmp_d = d_arr[0]; d_arr[0] = d_arr[1]; d_arr[1] = tmp_d; let tmp_i = idx_arr[0]; idx_arr[0] = idx_arr[1]; idx_arr[1] = tmp_i; }
+        if (d_arr[2] < d_arr[3]) { let tmp_d = d_arr[2]; d_arr[2] = d_arr[3]; d_arr[3] = tmp_d; let tmp_i = idx_arr[2]; idx_arr[2] = idx_arr[3]; idx_arr[3] = tmp_i; }
+        if (d_arr[0] < d_arr[2]) { let tmp_d = d_arr[0]; d_arr[0] = d_arr[2]; d_arr[2] = tmp_d; let tmp_i = idx_arr[0]; idx_arr[0] = idx_arr[2]; idx_arr[2] = tmp_i; }
+        if (d_arr[1] < d_arr[3]) { let tmp_d = d_arr[1]; d_arr[1] = d_arr[3]; d_arr[3] = tmp_d; let tmp_i = idx_arr[1]; idx_arr[1] = idx_arr[3]; idx_arr[3] = tmp_i; }
+        if (d_arr[1] < d_arr[2]) { let tmp_d = d_arr[1]; d_arr[1] = d_arr[2]; d_arr[2] = tmp_d; let tmp_i = idx_arr[1]; idx_arr[1] = idx_arr[2]; idx_arr[2] = tmp_i; }
 
-        if (isLeaf) {
-            let count = boundsInfox & 0x0000ffffu;
-            let offset = boundsInfoy;
+        let data0_arr = array<u32, 4>(node.data0.x, node.data0.y, node.data0.z, node.data0.w);
+        let data1_arr = array<u32, 4>(node.data1.x, node.data1.y, node.data1.z, node.data1.w);
 
-            let localHit = intersectTriangles(bvh_position, bvh_index, offset, count, ray);
+        for (var k = 0u; k < 4u; k++) {
+            let childIdx = idx_arr[k];
+            let dist = d_arr[k];
 
-            if (localHit.didHit && localHit.dist < bestHit.dist) {
-                bestHit = localHit;
+            if (dist >= bestHit.dist) { continue; } // Missed or further than bestHit
+            
+            let data1 = data1_arr[childIdx];
+            if (data1 == 0xFFFFFFFFu) { continue; } // Empty child
+
+            let data0 = data0_arr[childIdx];
+            
+            if (data1 == 0u) {
+                // Internal Node: push to stack
+                if (pointer >= i32(BVH_STACK_DEPTH) - 1) { continue; }
+                pointer++;
+                bvh_stack[pointer] = data0;
+            } else {
+                // Leaf Node: intersect triangles
+                let count = data1;
+                let offset = data0;
+                let localHit = intersectTriangles(bvh_position, bvh_index, offset, count, ray);
+                
+                if (localHit.didHit && localHit.dist < bestHit.dist) {
+                    bestHit = localHit;
+                }
             }
-        } else {
-            let leftIndex = currNodeIndex + 1u;
-            let splitAxis = boundsInfox & 0x0000ffffu;
-            let rightIndex = currNodeIndex + boundsInfoy;
-
-            // Optional enhancement: read ray.dirSign to replace select, 
-            // but for safety we use the standard check.
-            let leftToRight = ray.direction[splitAxis] >= 0.0;
-            let c1 = select(rightIndex, leftIndex, leftToRight);
-            let c2 = select(leftIndex, rightIndex, leftToRight);
-
-            // Stack Protection: If we're about to exceed local BVH_STACK_DEPTH, 
-            // safely discard deeper traversal instead of triggering an out-of-bounds error.
-            if (pointer >= i32(BVH_STACK_DEPTH) - 2) {
-                continue;
-            }
-
-            pointer = pointer + 1;
-            bvh_stack[pointer] = c2;
-
-            pointer = pointer + 1;
-            bvh_stack[pointer] = c1;
         }
     }
 

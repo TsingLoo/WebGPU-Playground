@@ -72,9 +72,7 @@ export class SSRPass {
         });
 
         graph.addRenderPass("SSR Generate")
-            .readTexture(sceneColorHandle)
             .readTexture(depthHandle)
-            .readTexture(albedoHandle)
             .readTexture(normalHandle)
             .readTexture(specularHandle)
             .readTexture(hizHandle)
@@ -84,12 +82,11 @@ export class SSRPass {
                     label: "ssr main bgl",
                     layout: this.ssrPipeline.getBindGroupLayout(1),
                     entries: [
-                        { binding: 0, resource: pass.getTextureView(sceneColorHandle) },
-                        { binding: 1, resource: pass.getTextureView(depthHandle) },
-                        { binding: 2, resource: pass.getTextureView(normalHandle) },
-                        { binding: 3, resource: pass.getTextureView(specularHandle) },
-                        { binding: 4, resource: pass.getTextureView(hizHandle) },
-                        { binding: 5, resource: { buffer: this.deps.ssrUniformsBuffer } }
+                        { binding: 0, resource: pass.getTextureView(hizHandle) },
+                        { binding: 1, resource: pass.getTextureView(normalHandle) },
+                        { binding: 2, resource: pass.getTextureView(specularHandle) },
+                        { binding: 3, resource: pass.getTextureView(depthHandle) },
+                        { binding: 4, resource: { buffer: this.deps.ssrUniformsBuffer } }
                     ]
                 });
 
