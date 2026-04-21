@@ -21,7 +21,7 @@ export class DebugPass {
             label: "debug box pipeline",
             layout: renderer.device.createPipelineLayout({ bindGroupLayouts: [deps.cameraBindGroupLayout, this.bindGroupLayout] }),
             vertex: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "vs_main" },
-            fragment: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "fs_main", targets: [{ format: renderer.canvasFormat }] },
+            fragment: { module: renderer.device.createShaderModule({ code: shaders.debugBoxSrc }), entryPoint: "fs_main", targets: [{ format: "rgba16float" }] },
             primitive: { topology: "line-list" },
             depthStencil: { depthWriteEnabled: false, depthCompare: "greater-equal", format: "depth24plus" }
         });

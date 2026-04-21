@@ -29,6 +29,7 @@ export class DDGIDebugPass {
                 { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }, // probeData
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // irradiance atlas
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, // ddgiSampler
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // visibility atlas
             ]
         });
 
@@ -42,10 +43,10 @@ export class DDGIDebugPass {
             fragment: { 
                 module: renderer.device.createShaderModule({ label: "DDGI Debug FS", code: shaders.ddgiDebugProbesSrc }), 
                 entryPoint: "fs_main", 
-                targets: [{ format: renderer.canvasFormat }] 
+                targets: [{ format: "rgba16float" }] 
             },
             primitive: { topology: "triangle-list", cullMode: 'back' },
-            depthStencil: { depthWriteEnabled: true, depthCompare: "greater", format: "depth24plus" }
+            depthStencil: { depthWriteEnabled: false, depthCompare: "greater", format: "depth24plus" }
         });
 
         this.initialized = true;
@@ -66,7 +67,8 @@ export class DDGIDebugPass {
                 { binding: 0, resource: { buffer: deps.ddgi.ddgiUniformBuffer } },
                 { binding: 1, resource: { buffer: deps.ddgi.probeDataBuffer } },
                 { binding: 2, resource: deps.ddgi.getCurrentIrradianceView() },
-                { binding: 3, resource: deps.ddgi.ddgiSampler }
+                { binding: 3, resource: deps.ddgi.ddgiSampler },
+                { binding: 4, resource: deps.ddgi.getCurrentVisibilityView() }
             ]
         });
 
@@ -77,7 +79,7 @@ export class DDGIDebugPass {
         // Sphere index count per probe (ico sphere 3 subdiv) is ~240 indices, max probes is 22*22*22 = 10648
         // Instanced draw
         const sphereIndices = 240 * 3; // Approx 240 triangles = 720 vertices
-        const instanceCount = (deps.ddgi as any).gridDimensions[0] * (deps.ddgi as any).gridDimensions[1] * (deps.ddgi as any).gridDimensions[2];
+        const instanceCount = DDGI.TOTAL_PROBES;
         
         pass.draw(sphereIndices, instanceCount);
     }

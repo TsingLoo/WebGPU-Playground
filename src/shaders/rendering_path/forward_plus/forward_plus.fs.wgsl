@@ -91,6 +91,23 @@ fn main(in: FragmentInput) -> @location(0) vec4f
     var diffuseAmbient = vec3f(0.0);
     if (ddgiParams.ddgi_enabled.x > 0.5) {
         let ddgi_totalIrr = evaluateDDGI(in.pos_world, N, V, ddgiParams, ddgiIrradianceAtlas, ddgiVisibilityAtlas, ddgiSampler);
+        
+        let ddgiDebugMode = i32(ddgiParams.ddgi_enabled.y + 0.5);
+        if (ddgiDebugMode == 1 || ddgiDebugMode == 2) {
+            let uv = in.fragcoord.xy / vec2f(f32(clusterSet.screen_width), f32(clusterSet.screen_height));
+            if (uv.x > 0.6 && uv.y < 0.4) {
+                let atlasUV = vec2f((uv.x - 0.6) / 0.4, uv.y / 0.4);
+                if (ddgiDebugMode == 1) {
+                    let atlasColor = textureSampleLevel(ddgiIrradianceAtlas, ddgiSampler, atlasUV, 0.0).rgb;
+                    return vec4f(atlasColor * 2.0, 1.0);
+                } else {
+                    let atlasDist = textureSampleLevel(ddgiVisibilityAtlas, ddgiSampler, atlasUV, 0.0).rg;
+                    let max_dist = max(ddgiParams.grid_spacing.x, max(ddgiParams.grid_spacing.y, ddgiParams.grid_spacing.z)) * 4.0;
+                    return vec4f(atlasDist.x/max_dist, atlasDist.y/(max_dist*max_dist), 0.0, 1.0);
+                }
+            }
+        }
+        
         diffuseAmbient = ddgi_totalIrr * albedo;
     } else if (rcParams.params.w > 0.5) {
         let rc_totalIrr = evaluateRCProbes(in.pos_world, N, V, rcParams, rcIrradianceAtlas, rcSampler);
